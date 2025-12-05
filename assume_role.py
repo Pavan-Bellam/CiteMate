@@ -106,16 +106,11 @@ def main() -> None:
         print(f"AWS_ACCESS_KEY_ID={creds['AccessKeyId']}")
         print(f"AWS_SECRET_ACCESS_KEY={creds['SecretAccessKey']}")
         print(f"AWS_SESSION_TOKEN={creds['SessionToken']}")
-        print(f"\nExpires: {creds['Expiration']}")
-        print(f"Source Identity: {response.get('SourceIdentity', username)}")
     else:
         # Output PowerShell commands to set environment variables
         print(f'$env:AWS_ACCESS_KEY_ID = "{creds["AccessKeyId"]}"')
         print(f'$env:AWS_SECRET_ACCESS_KEY = "{creds["SecretAccessKey"]}"')
         print(f'$env:AWS_SESSION_TOKEN = "{creds["SessionToken"]}"')
-        print("")
-        print(f'# Credentials expire: {creds["Expiration"]}')
-        print(f'# Source Identity: {response.get("SourceIdentity", username)}')
 
 
 if __name__ == "__main__":

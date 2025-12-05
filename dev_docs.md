@@ -114,6 +114,29 @@ Creates an ECR repository with a push policy.
 - `ecr:GetAuthorizationToken` (on `*`)
 - Push actions: BatchCheckLayerAvailability, GetDownloadUrlForLayer, BatchGetImage, PutImage, InitiateLayerUpload, UploadLayerPart, CompleteLayerUpload
 
+#### modules/sqs/
+
+Creates an SQS queue with a dead letter queue.
+
+**Files:**
+- `main.tf` - Main queue + DLQ with redrive policy
+- `variables.tf` - queue_name, visibility_timeout, retention, etc.
+- `outputs.tf` - queue_url, queue_arn, dlq_url, dlq_arn
+
+**Configuration:**
+- `visibility_timeout_seconds` - default 600 (10 min)
+- `message_retention_seconds` - default 1209600 (14 days)
+- `receive_wait_time_seconds` - default 20 (long polling)
+- `max_receive_count` - default 3 (then sent to DLQ)
+
+**Usage:**
+```hcl
+module "sqs" {
+  source     = "../../modules/sqs"
+  queue_name = "${var.project_name}-dev-${var.developer}-papers"
+}
+```
+
 #### envs/development/
 
 Per-developer environment configuration.
@@ -247,6 +270,7 @@ ingestion/producer/
 1. Fetches paper metadata from ArXiv (query: `cat:cs.LG`)
 2. Downloads PDFs
 3. Uploads to S3 at `{BUCKET_PREFIX}/{arxiv_id}.pdf`
+4. Sends message to SQS with paper metadata and S3 key
 
 ### Environment Variables
 
@@ -254,6 +278,9 @@ ingestion/producer/
 |----------|-------------|---------|
 | `BUCKET_NAME` | S3 bucket name | from config.json |
 | `BUCKET_PREFIX` | S3 key prefix | `development/{username}/papers` |
+| `QUEUE_URL` | SQS queue URL | from run.py |
+| `ARXIV_CATEGORY` | ArXiv category to fetch | `cs.LG` |
+| `MAX_RESULTS` | Max papers to fetch | `10` |
 | `AWS_ACCESS_KEY_ID` | AWS credentials | from assume_role.py |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials | from assume_role.py |
 | `AWS_SESSION_TOKEN` | AWS credentials | from assume_role.py |
@@ -284,3 +311,4 @@ $env:BUCKET_PREFIX = "development/your-username/papers"
 
 uv run python main.py
 ```
+
