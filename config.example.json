@@ -1,0 +1,9 @@
+{
+  "project_name": "ras",
+  "aws_region": "us-east-1",
+  "aws_account_id": "YOUR_ACCOUNT_ID",
+  "username": "YOUR_IAM_USERNAME",
+  "bootstrap": {
+    "bucket_name": "YOUR_BUCKET_NAME"
+  }
+}

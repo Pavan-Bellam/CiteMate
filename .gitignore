@@ -67,5 +67,8 @@ override.tf.json
 # Brainstorming (experimental)
 brainstorming/
 
+# Config (contains account-specific values)
+config.json
+
 # Misc
 nul
