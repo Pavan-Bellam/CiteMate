@@ -16,3 +16,8 @@ module "storage" {
   prefix      = "development/${var.developer}"
   folders     = var.storage_folders
 }
+
+module "sqs" {
+  source     = "../../modules/sqs"
+  queue_name = "${var.project_name}-dev-${var.developer}-papers"
+}
