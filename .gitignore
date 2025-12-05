@@ -48,3 +48,27 @@ mlartifacts/
 # Temporary files
 *.tmp
 *.log
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfbackend
+!*.tfbackend.example
+
+# Brainstorming (experimental)
+brainstorming/
+
+# Config (contains account-specific values)
+config.json
+
+# Misc
+nul

@@ -1,0 +1,12 @@
+services:
+  producer:
+    build: ./ingestion/producer
+    environment:
+      # S3 config
+      - BUCKET_NAME=${BUCKET_NAME}
+      - BUCKET_PREFIX=${BUCKET_PREFIX}
+      # AWS credentials (from assume_role.py)
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}

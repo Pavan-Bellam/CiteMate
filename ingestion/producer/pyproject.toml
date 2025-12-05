@@ -1,0 +1,20 @@
+[project]
+name = "ras-producer"
+version = "0.1.0"
+description = "Ingests ArXiv papers and queues them for processing"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "arxiv>=2.3.1",
+    "boto3>=1.42.0",
+    "httpx>=0.28.1",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
