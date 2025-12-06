@@ -32,10 +32,23 @@ def get_env(config: dict) -> dict:
     """Build environment variables for docker-compose."""
     env = os.environ.copy()
 
-    # S3 config from config.json
+    username = config["username"]
+    project = config["project_name"]
+    region = config["aws_region"]
+    account_id = config["aws_account_id"]
+
+    # S3 config
     env["BUCKET_NAME"] = config["bootstrap"]["bucket_name"]
-    env["BUCKET_PREFIX"] = f"development/{config['username']}/papers"
-    env["AWS_REGION"] = config["aws_region"]
+    env["BUCKET_PREFIX"] = f"development/{username}/papers"
+    env["AWS_REGION"] = region
+
+    # SQS config
+    queue_name = f"{project}-dev-{username}-papers"
+    env["QUEUE_URL"] = f"https://sqs.{region}.amazonaws.com/{account_id}/{queue_name}"
+
+    # Producer config
+    env["ARXIV_CATEGORY"] = config["producer"]["arxiv_category"]
+    env["MAX_RESULTS"] = str(config["producer"]["max_results"])
 
     return env
 

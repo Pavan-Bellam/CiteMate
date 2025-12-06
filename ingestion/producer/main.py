@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import date, timedelta
 
-from src import ArxivClient, S3Client, setup_logging
+from src import ArxivClient, S3Client, SQSClient, setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ def main() -> None:
         bucket_name=os.environ["BUCKET_NAME"],
         prefix=os.environ["BUCKET_PREFIX"],
     )
+    sqs_client = SQSClient(queue_url=os.environ["QUEUE_URL"])
 
     # Fetch papers submitted yesterday
     target_date = date.today() - timedelta(days=1)
@@ -24,8 +25,8 @@ def main() -> None:
 
     with ArxivClient() as arxiv_client:
         papers = arxiv_client.fetch_papers(
-            category="cs.LG",
-            max_results=1,  # TODO: Change back to 10000 for production
+            category=os.environ["ARXIV_CATEGORY"],
+            max_results=int(os.environ["MAX_RESULTS"]),
             submitted_date=target_date,
         )
         for paper in papers:
@@ -37,7 +38,8 @@ def main() -> None:
 
             try:
                 pdf_bytes = arxiv_client.download_pdf(paper["pdf_url"])
-                s3_client.upload_pdf(arxiv_id, pdf_bytes)
+                s3_key = s3_client.upload_pdf(arxiv_id, pdf_bytes)
+                sqs_client.send_message(paper, s3_key)
                 uploaded += 1
             except Exception as e:
                 logger.error(f"Failed to process {arxiv_id}: {e}")

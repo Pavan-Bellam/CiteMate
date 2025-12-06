@@ -5,5 +5,9 @@
   "username": "YOUR_IAM_USERNAME",
   "bootstrap": {
     "bucket_name": "YOUR_BUCKET_NAME"
+  },
+  "producer": {
+    "arxiv_category": "cs.LG",
+    "max_results": 10
   }
 }

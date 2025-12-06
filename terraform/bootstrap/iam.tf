@@ -135,6 +135,33 @@ resource "aws_iam_policy" "developer_infrastructure_policy" {
                     "iam:ListPolicyVersions"
                 ]
                 Resource = "arn:aws:iam::${var.aws_account_id}:policy/${var.project_name}-dev-$${aws:SourceIdentity}-*"
+            },
+            {
+                Sid = "AllowSQSQueueManagement"
+                Effect = "Allow"
+                Action = [
+                    "sqs:CreateQueue",
+                    "sqs:DeleteQueue",
+                    "sqs:GetQueueAttributes",
+                    "sqs:GetQueueUrl",
+                    "sqs:SetQueueAttributes",
+                    "sqs:TagQueue",
+                    "sqs:UntagQueue",
+                    "sqs:ListQueueTags"
+                ]
+                Resource = "arn:aws:sqs:${var.aws_region}:${var.aws_account_id}:${var.project_name}-dev-$${aws:SourceIdentity}-*"
+            },
+            {
+                Sid = "AllowSQSQueueAccess"
+                Effect = "Allow"
+                Action = [
+                    "sqs:SendMessage",
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueAttributes",
+                    "sqs:GetQueueUrl"
+                ]
+                Resource = "arn:aws:sqs:${var.aws_region}:${var.aws_account_id}:${var.project_name}-dev-$${aws:SourceIdentity}-*"
             }
         ]
     })

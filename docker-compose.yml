@@ -5,6 +5,11 @@ services:
       # S3 config
       - BUCKET_NAME=${BUCKET_NAME}
       - BUCKET_PREFIX=${BUCKET_PREFIX}
+      # SQS config
+      - QUEUE_URL=${QUEUE_URL}
+      # Producer config
+      - ARXIV_CATEGORY=${ARXIV_CATEGORY}
+      - MAX_RESULTS=${MAX_RESULTS}
       # AWS credentials (from assume_role.py)
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
