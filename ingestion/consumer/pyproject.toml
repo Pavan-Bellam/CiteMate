@@ -1,0 +1,23 @@
+[project]
+name = "ras-consumer"
+version = "0.1.0"
+description = "Processes papers from SQS queue"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.42.0",
+    "unstructured-client>=0.30.0",
+    "unstructured>=0.16.0",
+    "redis>=5.0.0",
+    "openai>=1.0.0",
+    "pinecone>=5.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

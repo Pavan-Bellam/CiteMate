@@ -213,6 +213,7 @@ def dev_apply() -> None:
     config = load_config()
 
     print("\nRunning terraform apply...")
+    redis_config = config.get("redis", {})
     run_command([
         "terraform", "apply",
         "-auto-approve",
@@ -220,6 +221,9 @@ def dev_apply() -> None:
         f"-var=aws_region={config['aws_region']}",
         f"-var=bucket_name={config['bootstrap']['bucket_name']}",
         f"-var=developer={config['username']}",
+        f"-var=redis_db_name={redis_config.get('redis_db_name', f'{config["project_name"]}-dev-{config["username"]}')}",
+        f"-var=redis_primary_region={redis_config.get('redis_primary_region', 'us-east-1')}",
+        f"-var=redis_tls={str(redis_config.get('redis_tls', True)).lower()}",
     ], cwd=DEV_DIR)
 
     print("\n=== Apply Complete ===")

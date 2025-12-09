@@ -40,6 +40,10 @@ aws iam add-user-to-group --group-name ras-developers --user-name {username}
 ### 3. Dev Environment
 
 ```powershell
+# Set Upstash credentials (for Terraform)
+$env:UPSTASH_EMAIL = "your-email@example.com"
+$env:UPSTASH_API_KEY = "your-upstash-api-key"
+
 # Assume the developer role
 python assume_role.py | Invoke-Expression
 
@@ -49,6 +53,8 @@ python setup.py dev apply
 ```
 
 Re-run `assume_role.py` when credentials expire (1 hour).
+
+Get Upstash credentials from [Upstash Console](https://console.upstash.com/account/api).
 
 ## Commands
 
@@ -67,12 +73,47 @@ python setup.py dev destroy       - Destroy dev infrastructure
 ### Services (run.py)
 
 ```
-python run.py producer build      - Build producer image
-python run.py producer up         - Run producer container
-python run.py producer down       - Stop producer container
+python run.py producer build          - Build producer image
+python run.py producer up             - Run producer container
+python run.py producer down           - Stop producer container
+
+python run.py consumer build          - Build consumer image
+python run.py consumer up [mode]      - Run consumer (mode: parse, process, full)
+python run.py consumer down           - Stop consumer container
 ```
 
+**Consumer modes:**
+- `parse` - Consume from SQS, parse PDFs, save raw elements to S3
+- `process` - Load raw elements from S3, chunk, embed, store to Pinecone
+- `full` - Parse and process in one pipeline (default)
+
 Requires AWS credentials (run `python assume_role.py | Invoke-Expression` first).
+
+### Environment Variables
+
+Create a `.env` file in the project root for secrets:
+
+```
+# Unstructured API (for PDF parsing)
+UNSTRUCTURED_API_KEY=your-api-key
+
+# Redis (from Terraform output or Upstash console)
+REDIS_URL=rediss://default:xxx@xxx.upstash.io:6379
+
+# OpenAI (for embeddings)
+OPENAI_API_KEY=sk-xxx
+
+# Pinecone (for vector storage)
+PINECONE_API_KEY=xxx
+```
+
+Docker-compose automatically loads this file.
+
+**For Terraform** (set in shell, not .env):
+```powershell
+$env:UPSTASH_EMAIL = "your-email"
+$env:UPSTASH_API_KEY = "your-api-key"
+```
 
 ## Documentation
 

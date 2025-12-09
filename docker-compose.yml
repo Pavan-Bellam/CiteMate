@@ -10,6 +10,39 @@ services:
       # Producer config
       - ARXIV_CATEGORY=${ARXIV_CATEGORY}
       - MAX_RESULTS=${MAX_RESULTS}
+      - MAX_PAGES=${MAX_PAGES}
+      # AWS credentials (from assume_role.py)
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}
+
+  consumer:
+    build: ./ingestion/consumer
+    environment:
+      # S3 config
+      - BUCKET_NAME=${BUCKET_NAME}
+      - BUCKET_PREFIX=${BUCKET_PREFIX}
+      # SQS config
+      - QUEUE_URL=${QUEUE_URL}
+      # Consumer mode (parse, process, full)
+      - MODE=${MODE:-full}
+      # Unstructured API
+      - UNSTRUCTURED_API_KEY=${UNSTRUCTURED_API_KEY}
+      # Chunking config
+      - CHUNK_MAX_CHARACTERS=${CHUNK_MAX_CHARACTERS:-1500}
+      - CHUNK_NEW_AFTER_N_CHARS=${CHUNK_NEW_AFTER_N_CHARS:-1000}
+      - CHUNK_COMBINE_UNDER_N_CHARS=${CHUNK_COMBINE_UNDER_N_CHARS:-500}
+      # Redis config
+      - REDIS_URL=${REDIS_URL}
+      # OpenAI config
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_TOKEN_THRESHOLD=${EMBEDDING_TOKEN_THRESHOLD:-8000}
+      # Pinecone config
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION}
       # AWS credentials (from assume_role.py)
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
