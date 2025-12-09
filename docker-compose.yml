@@ -10,6 +10,7 @@ services:
       # Producer config
       - ARXIV_CATEGORY=${ARXIV_CATEGORY}
       - MAX_RESULTS=${MAX_RESULTS}
+      - MAX_PAGES=${MAX_PAGES}
       # AWS credentials (from assume_role.py)
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}

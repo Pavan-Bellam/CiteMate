@@ -8,6 +8,7 @@
   },
   "producer": {
     "arxiv_category": "cs.LG",
-    "max_results": 10
+    "max_results": 10,
+    "max_pages": 20
   }
 }

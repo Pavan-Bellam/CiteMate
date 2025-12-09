@@ -49,6 +49,7 @@ def get_env(config: dict) -> dict:
     # Producer config
     env["ARXIV_CATEGORY"] = config["producer"]["arxiv_category"]
     env["MAX_RESULTS"] = str(config["producer"]["max_results"])
+    env["MAX_PAGES"] = str(config["producer"].get("max_pages", 20))
 
     return env
 

@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import date, timedelta
 
-from src import ArxivClient, S3Client, SQSClient, setup_logging
+from src import ArxivClient, S3Client, SQSClient, setup_logging, check_page_count, TooManyPagesError
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,11 @@ def main() -> None:
     else:
         start_date = end_date - timedelta(days=1)
 
+    max_pages = int(os.environ.get("MAX_PAGES", 20))
+
     uploaded = 0
     skipped = 0
+    skipped_pages = 0
     failed = 0
 
     with ArxivClient() as arxiv_client:
@@ -50,6 +53,16 @@ def main() -> None:
 
             try:
                 pdf_bytes = arxiv_client.download_pdf(paper["pdf_url"])
+
+                # Check page count before uploading
+                try:
+                    page_count = check_page_count(pdf_bytes, max_pages)
+                    logger.debug(f"{arxiv_id}: {page_count} pages")
+                except TooManyPagesError as e:
+                    logger.info(f"Skipping {arxiv_id}: {e}")
+                    skipped_pages += 1
+                    continue
+
                 s3_key = s3_client.upload_pdf(arxiv_id, pdf_bytes)
                 sqs_client.send_message(paper, s3_key)
                 uploaded += 1
@@ -57,7 +70,7 @@ def main() -> None:
                 logger.error(f"Failed to process {arxiv_id}: {e}")
                 failed += 1
 
-    logger.info(f"Completed: uploaded={uploaded}, skipped={skipped}, failed={failed}")
+    logger.info(f"Completed: uploaded={uploaded}, skipped_existing={skipped}, skipped_pages={skipped_pages}, failed={failed}")
 
 
 if __name__ == "__main__":

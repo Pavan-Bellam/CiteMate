@@ -260,17 +260,19 @@ ingestion/producer/
 ├── main.py              # Entry point
 ├── src/
 │   ├── arxiv_client.py  # ArXiv API + PDF download
-│   └── s3_client.py     # S3 upload
+│   ├── s3_client.py     # S3 upload
+│   └── pdf_utils.py     # PDF page count validation
 ├── Dockerfile           # uv + Python 3.12
-└── pyproject.toml       # Dependencies (arxiv, boto3, httpx)
+└── pyproject.toml       # Dependencies (arxiv, boto3, httpx, pypdf)
 ```
 
 ### How It Works
 
 1. Fetches paper metadata from ArXiv (query: `cat:cs.LG`)
 2. Downloads PDFs
-3. Uploads to S3 at `{BUCKET_PREFIX}/pdfs/{arxiv_id}.pdf`
-4. Sends message to SQS with paper metadata and S3 key
+3. Checks page count (skips papers exceeding `MAX_PAGES`)
+4. Uploads to S3 at `{BUCKET_PREFIX}/pdfs/{arxiv_id}.pdf`
+5. Sends message to SQS with paper metadata and S3 key
 
 ### Environment Variables
 
@@ -283,6 +285,7 @@ ingestion/producer/
 | `MAX_RESULTS` | Max papers to fetch | `10` |
 | `START_DATE` | Start of date range (ISO format, optional) | `2024-01-01` |
 | `END_DATE` | End of date range (ISO format, optional) | `2024-12-01` |
+| `MAX_PAGES` | Skip papers exceeding this page count | `20` |
 | `AWS_ACCESS_KEY_ID` | AWS credentials | from assume_role.py |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials | from assume_role.py |
 | `AWS_SESSION_TOKEN` | AWS credentials | from assume_role.py |
