@@ -279,7 +279,7 @@ ingestion/producer/
 | `BUCKET_NAME` | S3 bucket name | from config.json |
 | `BUCKET_PREFIX` | S3 key prefix | `development/{username}/papers` |
 | `QUEUE_URL` | SQS queue URL | from run.py |
-| `ARXIV_CATEGORY` | ArXiv category to fetch | `cs.LG` |
+| `ARXIV_CATEGORY` | ArXiv category (comma-separated for multiple) | `cs.LG` or `cs.AI,cs.LG,cs.CL` |
 | `MAX_RESULTS` | Max papers to fetch | `10` |
 | `AWS_ACCESS_KEY_ID` | AWS credentials | from assume_role.py |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials | from assume_role.py |

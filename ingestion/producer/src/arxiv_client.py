@@ -41,13 +41,28 @@ class ArxivClient:
             self._http_client.close()
             self._http_client = None
 
-    def _build_query(self, category: str, submitted_date: date | None) -> str:
-        """Build ArXiv query string with optional date filter."""
-        query = f"cat:{category}"
+    def _build_query(
+        self,
+        categories: str,
+        start_date: date | None,
+        end_date: date | None,
+    ) -> str:
+        """Build ArXiv query string with optional date filter.
 
-        if submitted_date:
-            start = submitted_date.strftime("%Y%m%d")
-            end = (submitted_date + timedelta(days=1)).strftime("%Y%m%d")
+        Args:
+            categories: Single category or comma-separated list (e.g., "cs.LG" or "cs.AI,cs.LG,cs.CL")
+        """
+        # Handle multiple categories
+        cat_list = [c.strip() for c in categories.split(",")]
+        if len(cat_list) == 1:
+            query = f"cat:{cat_list[0]}"
+        else:
+            cat_query = " OR ".join(f"cat:{c}" for c in cat_list)
+            query = f"({cat_query})"
+
+        if start_date and end_date:
+            start = start_date.strftime("%Y%m%d")
+            end = end_date.strftime("%Y%m%d")
             query = f"{query} AND submittedDate:[{start}0000 TO {end}0000]"
 
         return query
@@ -56,7 +71,8 @@ class ArxivClient:
         self,
         category: str,
         max_results: int,
-        submitted_date: date | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> Generator[dict, None, None]:
         """
         Fetch paper metadata from ArXiv.
@@ -64,12 +80,13 @@ class ArxivClient:
         Args:
             category: ArXiv category (e.g., "cs.LG").
             max_results: Maximum number of papers to fetch.
-            submitted_date: If provided, only fetch papers submitted on this date.
+            start_date: If provided with end_date, filter by submission date range.
+            end_date: End of date range (exclusive).
 
         Yields:
             Paper metadata dictionaries.
         """
-        query = self._build_query(category, submitted_date)
+        query = self._build_query(category, start_date, end_date)
         logger.info(f"Fetching papers: query='{query}', max_results={max_results}")
 
         search = arxiv.Search(
