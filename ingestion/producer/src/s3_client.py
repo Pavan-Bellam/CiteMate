@@ -28,7 +28,7 @@ class S3Client:
         Raises:
             ClientError: If upload fails.
         """
-        key = f"{self.prefix}/{arxiv_id}.pdf"
+        key = f"{self.prefix}/pdfs/{arxiv_id}.pdf"
 
         try:
             self.client.put_object(
@@ -53,7 +53,7 @@ class S3Client:
         Returns:
             True if file exists, False otherwise.
         """
-        key = f"{self.prefix}/{arxiv_id}.pdf"
+        key = f"{self.prefix}/pdfs/{arxiv_id}.pdf"
 
         try:
             self.client.head_object(Bucket=self.bucket_name, Key=key)

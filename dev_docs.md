@@ -269,7 +269,7 @@ ingestion/producer/
 
 1. Fetches paper metadata from ArXiv (query: `cat:cs.LG`)
 2. Downloads PDFs
-3. Uploads to S3 at `{BUCKET_PREFIX}/{arxiv_id}.pdf`
+3. Uploads to S3 at `{BUCKET_PREFIX}/pdfs/{arxiv_id}.pdf`
 4. Sends message to SQS with paper metadata and S3 key
 
 ### Environment Variables
