@@ -10,5 +10,10 @@
     "arxiv_category": "cs.LG",
     "max_results": 10,
     "max_pages": 20
+  },
+  "redis": {
+    "redis_db_name": "YOUR_REDIS_DB_NAME",
+    "redis_primary_region": "us-east-1",
+    "redis_tls": true
   }
 }

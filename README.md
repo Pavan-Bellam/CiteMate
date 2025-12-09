@@ -40,6 +40,10 @@ aws iam add-user-to-group --group-name ras-developers --user-name {username}
 ### 3. Dev Environment
 
 ```powershell
+# Set Upstash credentials (for Terraform)
+$env:UPSTASH_EMAIL = "your-email@example.com"
+$env:UPSTASH_API_KEY = "your-upstash-api-key"
+
 # Assume the developer role
 python assume_role.py | Invoke-Expression
 
@@ -49,6 +53,8 @@ python setup.py dev apply
 ```
 
 Re-run `assume_role.py` when credentials expire (1 hour).
+
+Get Upstash credentials from [Upstash Console](https://console.upstash.com/account/api).
 
 ## Commands
 
