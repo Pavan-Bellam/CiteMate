@@ -3,9 +3,17 @@
 Run script for RAS services.
 
 Usage:
-    python run.py producer build  - Build producer image
-    python run.py producer up     - Run producer container
-    python run.py producer down   - Stop producer container
+    python run.py producer build        - Build producer image
+    python run.py producer up           - Run producer container
+    python run.py producer down         - Stop producer container
+    python run.py consumer build        - Build consumer image
+    python run.py consumer up [mode]    - Run consumer (mode: parse, process, full)
+    python run.py consumer down         - Stop consumer container
+
+Consumer modes:
+    parse   - Consume from SQS, parse PDFs, save raw elements to S3
+    process - Load raw elements from S3, chunk all papers (no SQS needed)
+    full    - Parse and process in one pipeline (default)
 """
 
 import json
@@ -51,6 +59,16 @@ def get_env(config: dict) -> dict:
     env["MAX_RESULTS"] = str(config["producer"]["max_results"])
     env["MAX_PAGES"] = str(config["producer"].get("max_pages", 20))
 
+    # Consumer config
+    consumer = config.get("consumer", {})
+    env["CHUNK_MAX_CHARACTERS"] = str(consumer.get("chunk_max_characters", 1500))
+    env["CHUNK_NEW_AFTER_N_CHARS"] = str(consumer.get("chunk_new_after_n_chars", 1000))
+    env["CHUNK_COMBINE_UNDER_N_CHARS"] = str(consumer.get("chunk_combine_under_n_chars", 500))
+    env["EMBEDDING_MODEL"] = consumer.get("embedding_model", "text-embedding-3-small")
+    env["EMBEDDING_TOKEN_THRESHOLD"] = str(consumer.get("embedding_token_threshold", 8000))
+    env["PINECONE_INDEX_NAME"] = consumer.get("pinecone_index_name", "")
+    env["EMBEDDING_DIMENSION"] = config.get("pinecone", {}).get("embedding_dimension", "1536")
+
     return env
 
 
@@ -82,7 +100,7 @@ def main() -> None:
     service = sys.argv[1]
     command = sys.argv[2]
 
-    if service not in ["producer"]:
+    if service not in ["producer", "consumer"]:
         print(f"Unknown service: {service}")
         print_usage()
         sys.exit(1)
@@ -99,6 +117,14 @@ def main() -> None:
     if command == "build":
         run_compose(["build", service], env)
     elif command == "up":
+        # Handle consumer mode argument
+        if service == "consumer" and len(sys.argv) >= 4:
+            mode = sys.argv[3]
+            if mode not in ["parse", "process", "full"]:
+                print(f"Unknown consumer mode: {mode}")
+                print_usage()
+                sys.exit(1)
+            env["MODE"] = mode
         run_compose(["up", service], env)
     elif command == "down":
         run_compose(["down"], env)

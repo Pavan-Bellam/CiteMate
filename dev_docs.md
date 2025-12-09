@@ -11,11 +11,14 @@ ras/
 │   ├── bootstrap/       # One-time setup (S3 bucket, IAM roles)
 │   ├── modules/
 │   │   ├── storage/     # S3 folder creation
-│   │   └── ecr/         # ECR repository + push policy
+│   │   ├── ecr/         # ECR repository + push policy
+│   │   ├── sqs/         # SQS queue + DLQ
+│   │   └── redis/       # Upstash Redis database
 │   └── envs/
 │       └── development/ # Environment-specific config
 └── ingestion/
-    └── producer/        # ArXiv paper fetcher
+    ├── producer/        # ArXiv paper fetcher
+    └── consumer/        # PDF parser, chunker, embedder
 ```
 
 ## Configuration
@@ -204,7 +207,9 @@ region = "{aws_region}"
 {bucket_name}/
 ├── development/
 │   └── {username}/           # Per-developer workspace
-│       ├── papers/           # Research paper PDFs
+│       ├── papers/
+│       │   ├── pdfs/         # Research paper PDFs
+│       │   └── raw/          # Parsed elements (JSON)
 │       └── terraform/
 │           └── terraform.tfstate
 ├── staging/
@@ -359,4 +364,132 @@ $env:BUCKET_PREFIX = "development/your-username/papers"
 
 uv run python main.py
 ```
+
+## Consumer
+
+The consumer processes papers from SQS, parses PDFs using Unstructured API, chunks them, generates embeddings, and stores vectors in Pinecone.
+
+### Structure
+
+```
+ingestion/consumer/
+├── main.py              # Entry point with mode selection
+├── src/
+│   ├── s3_client.py     # S3 download/upload (PDFs + raw elements)
+│   ├── sqs_client.py    # SQS receive/delete
+│   ├── unstructured_client.py  # PDF parsing + chunking
+│   ├── redis_client.py  # Chunk batching with token threshold
+│   ├── openai_client.py # Embedding generation
+│   ├── pinecone_client.py # Vector storage
+│   └── logger.py        # Logging setup
+├── Dockerfile           # uv + Python 3.12
+└── pyproject.toml       # Dependencies
+```
+
+### Modes
+
+The consumer supports three modes for flexibility during development:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `parse` | SQS → parse PDF → save raw elements to S3 | Initial ingestion |
+| `process` | Load raw from S3 → chunk → embed → Pinecone | Re-process with new params |
+| `full` | Both parse and process (default) | Production pipeline |
+
+### How It Works
+
+**Parse mode:**
+1. Polls SQS for messages
+2. Downloads PDF from S3
+3. Parses via Unstructured API
+4. Saves raw elements to S3 at `{BUCKET_PREFIX}/raw/{arxiv_id}.json`
+5. Deletes SQS message
+
+**Process mode:**
+1. Lists all raw element files in S3
+2. For each paper: load elements → chunk → push to Redis
+3. When token threshold reached: embed batch → store in Pinecone
+4. Flush remaining chunks at end
+
+**Full mode:**
+Combines parse and process in one continuous pipeline.
+
+### Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `BUCKET_NAME` | S3 bucket name | from config.json |
+| `BUCKET_PREFIX` | S3 key prefix | `development/{username}/papers` |
+| `QUEUE_URL` | SQS queue URL | from run.py |
+| `MODE` | Consumer mode | `parse`, `process`, or `full` |
+| `UNSTRUCTURED_API_KEY` | Unstructured API key | your API key |
+| `CHUNK_MAX_CHARACTERS` | Max chunk size | `1500` |
+| `CHUNK_NEW_AFTER_N_CHARS` | Soft limit for new chunk | `1000` |
+| `CHUNK_COMBINE_UNDER_N_CHARS` | Combine small chunks | `500` |
+| `REDIS_URL` | Upstash Redis connection URL | `rediss://...` |
+| `EMBEDDING_TOKEN_THRESHOLD` | Tokens before embedding batch | `8000` |
+| `OPENAI_API_KEY` | OpenAI API key | your API key |
+| `EMBEDDING_MODEL` | OpenAI embedding model | `text-embedding-3-large` |
+| `PINECONE_API_KEY` | Pinecone API key | your API key |
+| `PINECONE_INDEX_NAME` | Pinecone index name | `ras-papers` |
+| `EMBEDDING_DIMENSION` | Embedding vector dimension | `3072` |
+
+### Running with run.py
+
+```powershell
+# Assume role first
+python assume_role.py | Invoke-Expression
+
+# Build
+python run.py consumer build
+
+# Run in different modes
+python run.py consumer up           # default: full mode
+python run.py consumer up parse     # parse only
+python run.py consumer up process   # process only (no SQS needed)
+
+python run.py consumer down
+```
+
+### Running Locally (without Docker)
+
+```powershell
+cd ingestion/consumer
+uv sync
+
+# Set env vars
+$env:BUCKET_NAME = "your-bucket-name"
+$env:BUCKET_PREFIX = "development/your-username/papers"
+$env:QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789/queue-name"
+$env:UNSTRUCTURED_API_KEY = "your-api-key"
+$env:REDIS_URL = "rediss://default:xxx@xxx.upstash.io:6379"
+$env:OPENAI_API_KEY = "sk-xxx"
+$env:PINECONE_API_KEY = "xxx"
+$env:PINECONE_INDEX_NAME = "ras-papers"
+$env:EMBEDDING_DIMENSION = "3072"
+
+# Run in different modes
+uv run python main.py full
+uv run python main.py parse
+uv run python main.py process
+```
+
+### Experimentation Workflow
+
+1. Run producer once to fetch papers:
+   ```powershell
+   python run.py producer up
+   ```
+
+2. Parse all papers (saves raw elements to S3):
+   ```powershell
+   python run.py consumer up parse
+   ```
+
+3. Experiment with chunking params in `config.json`, then re-process:
+   ```powershell
+   python run.py consumer up process
+   ```
+
+4. Repeat step 3 as needed - no re-parsing required.
 

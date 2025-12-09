@@ -11,9 +11,20 @@
     "max_results": 10,
     "max_pages": 20
   },
+  "consumer": {
+    "chunk_max_characters": 1500,
+    "chunk_new_after_n_chars": 1000,
+    "chunk_combine_under_n_chars": 500,
+    "embedding_model": "text-embedding-3-small",
+    "embedding_token_threshold": 8000,
+    "pinecone_index_name": "YOUR_INDEX_NAME"
+  },
   "redis": {
     "redis_db_name": "YOUR_REDIS_DB_NAME",
     "redis_primary_region": "us-east-1",
     "redis_tls": true
+  },
+  "pinecone": {
+    "embedding_dimension": "1536"
   }
 }
