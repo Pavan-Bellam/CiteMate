@@ -16,8 +16,19 @@ def main() -> None:
     )
     sqs_client = SQSClient(queue_url=os.environ["QUEUE_URL"])
 
-    # Fetch papers submitted yesterday
-    target_date = date.today() - timedelta(days=1)
+    # Use env vars for date range, default to last 1 day
+    end_date_str = os.environ.get("END_DATE")
+    start_date_str = os.environ.get("START_DATE")
+
+    if end_date_str:
+        end_date = date.fromisoformat(end_date_str)
+    else:
+        end_date = date.today()
+
+    if start_date_str:
+        start_date = date.fromisoformat(start_date_str)
+    else:
+        start_date = end_date - timedelta(days=1)
 
     uploaded = 0
     skipped = 0
@@ -27,7 +38,8 @@ def main() -> None:
         papers = arxiv_client.fetch_papers(
             category=os.environ["ARXIV_CATEGORY"],
             max_results=int(os.environ["MAX_RESULTS"]),
-            submitted_date=target_date,
+            start_date=start_date,
+            end_date=end_date,
         )
         for paper in papers:
             arxiv_id = paper["arxiv_id"]

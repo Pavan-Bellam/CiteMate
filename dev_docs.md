@@ -281,9 +281,13 @@ ingestion/producer/
 | `QUEUE_URL` | SQS queue URL | from run.py |
 | `ARXIV_CATEGORY` | ArXiv category (comma-separated for multiple) | `cs.LG` or `cs.AI,cs.LG,cs.CL` |
 | `MAX_RESULTS` | Max papers to fetch | `10` |
+| `START_DATE` | Start of date range (ISO format, optional) | `2024-01-01` |
+| `END_DATE` | End of date range (ISO format, optional) | `2024-12-01` |
 | `AWS_ACCESS_KEY_ID` | AWS credentials | from assume_role.py |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials | from assume_role.py |
 | `AWS_SESSION_TOKEN` | AWS credentials | from assume_role.py |
+
+Default behavior fetches papers from the last 1 day. Set `START_DATE` and `END_DATE` for bulk loads.
 
 ### Running with run.py
 
