@@ -13,7 +13,9 @@ ras/
 │   │   ├── storage/     # S3 folder creation
 │   │   ├── ecr/         # ECR repository + push policy
 │   │   ├── sqs/         # SQS queue + DLQ
-│   │   └── redis/       # Upstash Redis database
+│   │   ├── redis/       # Upstash Redis database
+│   │   ├── ecs/         # ECS cluster + task definitions
+│   │   └── ssm/         # SSM Parameter Store secrets
 │   └── envs/
 │       └── development/ # Environment-specific config
 └── ingestion/
@@ -102,12 +104,17 @@ module "storage" {
 
 #### modules/ecr/
 
-Creates an ECR repository with a push policy.
+Creates ECR repositories for producer and consumer images with a push policy.
 
 **Files:**
-- `main.tf` - ECR repository + IAM push policy
+- `main.tf` - ECR repositories (producer + consumer) + IAM push policy
 - `variables.tf` - repository_name
-- `outputs.tf` - repository_url, repository_arn, repository_name, push_policy_arn
+- `outputs.tf` - repository URLs, ARNs, push_policy_arn
+- `versions.tf` - AWS provider >= 6.0.0
+
+**Resources Created:**
+- `{repository_name}-producer` - ECR repo for producer image
+- `{repository_name}-consumer` - ECR repo for consumer image
 
 **Configuration:**
 - `image_tag_mutability = "MUTABLE"` (can overwrite tags)
@@ -116,6 +123,13 @@ Creates an ECR repository with a push policy.
 **Push Policy Permissions:**
 - `ecr:GetAuthorizationToken` (on `*`)
 - Push actions: BatchCheckLayerAvailability, GetDownloadUrlForLayer, BatchGetImage, PutImage, InitiateLayerUpload, UploadLayerPart, CompleteLayerUpload
+
+**Outputs:**
+- `producer_repository_url` - URL for producer ECR repo
+- `producer_repository_arn` - ARN for producer ECR repo
+- `consumer_repository_url` - URL for consumer ECR repo
+- `consumer_repository_arn` - ARN for consumer ECR repo
+- `push_policy_arn` - IAM policy ARN for pushing images
 
 #### modules/sqs/
 
@@ -171,6 +185,91 @@ $env:UPSTASH_API_KEY = "your-upstash-api-key"
 ```
 
 Get credentials from [Upstash Console](https://console.upstash.com/account/api).
+
+#### modules/ecs/
+
+Creates an ECS cluster and task definitions for producer and consumer services (nightly batch jobs).
+
+**Files:**
+- `cluster.tf` - ECS Fargate cluster
+- `task_definition.tf` - Producer and consumer task definitions
+- `iam.tf` - Execution role, task roles, and policies
+- `variables.tf` - Input variables
+- `versions.tf` - AWS provider >= 6.0.0
+
+**Resources Created:**
+
+1. **ECS Cluster** (`aws_ecs_cluster.this`)
+   - Name: `{project_name}-{environment}`
+
+2. **Task Definitions** (Fargate)
+   - Producer: `{project_name}-{environment}-producer`
+   - Consumer: `{project_name}-{environment}-consumer`
+   - CPU: 256, Memory: 512
+   - Network mode: awsvpc
+
+3. **IAM Roles:**
+   - **Execution Role** (`ecs_execution_role`) - For ECS to pull images and read SSM parameters
+   - **Producer Task Role** - S3 PutObject (pdfs), SQS SendMessage
+   - **Consumer Task Role** - SQS Receive/Delete, S3 Get/Put (pdfs, raw), S3 ListBucket
+
+**Consumer Secrets (injected from SSM):**
+- `UNSTRUCTURED_API_KEY`
+- `UPSTASH_EMAIL`
+- `UPSTASH_API_KEY`
+- `PINECONE_API_KEY`
+- `REDIS_URL`
+- `OPENAI_API_KEY`
+
+**Usage:**
+```hcl
+module "ecs" {
+  source = "../modules/ecs"
+
+  project_name    = var.project_name
+  environment     = var.environment
+  bucket_name     = var.bucket_name
+  producer_image  = "${module.ecr.producer_repository_url}:latest"
+  consumer_image  = "${module.ecr.consumer_repository_url}:latest"
+  ssm_parameter_arns = module.ssm.parameter_arns
+  ssm_parameters     = module.ssm.parameter_names
+}
+```
+
+#### modules/ssm/
+
+Creates SSM Parameter Store SecureString parameters for application secrets.
+
+**Files:**
+- `main.tf` - SSM parameter resources
+- `variables.tf` - Secret values (marked sensitive)
+- `outputs.tf` - Parameter ARNs and names
+- `locals.tf` - Prefix helper
+- `versions.tf` - AWS provider >= 6.0.0
+
+**Parameters Created:**
+- `/{project_name}/{environment}/unstructured-api-key`
+- `/{project_name}/{environment}/upstash-email`
+- `/{project_name}/{environment}/upstash-api-key`
+- `/{project_name}/{environment}/pinecone-api-key`
+- `/{project_name}/{environment}/redis-url`
+- `/{project_name}/{environment}/openai-api-key`
+
+**Usage:**
+```hcl
+module "ssm" {
+  source = "../modules/ssm"
+
+  project_name         = var.project_name
+  environment          = var.environment
+  unstructured_api_key = var.unstructured_api_key  # From CI/CD secrets
+  upstash_email        = var.upstash_email
+  upstash_api_key      = var.upstash_api_key
+  pinecone_api_key     = var.pinecone_api_key
+  redis_url            = var.redis_url
+  openai_api_key       = var.openai_api_key
+}
+```
 
 #### envs/development/
 
@@ -294,6 +393,92 @@ python setup.py dev destroy  # terraform destroy
    ```bash
    aws iam add-user-to-group --group-name ras-developers --user-name {username}
    ```
+
+#### Staging Environment
+
+Deploy staging infrastructure with ECS, SSM secrets, and all supporting resources.
+
+**Prerequisites:**
+
+1. Create `config.staging.json` (copy from `config.json`):
+   ```json
+   {
+     "project_name": "ras",
+     "aws_region": "us-east-1",
+     "aws_account_id": "YOUR_ACCOUNT_ID",
+     "bootstrap": {
+       "bucket_name": "YOUR_BUCKET_NAME"
+     },
+     "producer": {
+       "arxiv_category": "cs.AI,cs.LG,cs.CL",
+       "max_results": 10,
+       "max_pages": 20
+     },
+     "consumer": {
+       "mode": "full",
+       "chunk_max_characters": 1500,
+       "chunk_new_after_n_chars": 1000,
+       "chunk_combine_under_n_chars": 500,
+       "embedding_model": "text-embedding-3-large",
+       "embedding_token_threshold": 6000,
+       "pinecone_index_name": "ras-papers"
+     },
+     "redis": {
+       "redis_primary_region": "us-east-1",
+       "redis_tls": true
+     },
+     "pinecone": {
+       "embedding_dimension": "3072"
+     }
+   }
+   ```
+
+2. Create `.env` file with secrets:
+   ```
+   UNSTRUCTURED_API_KEY=xxx
+   UPSTASH_EMAIL=xxx
+   UPSTASH_API_KEY=xxx
+   PINECONE_API_KEY=xxx
+   OPENAI_API_KEY=xxx
+   ```
+
+**Commands:**
+
+```powershell
+# Set Upstash credentials for Terraform provider
+$env:UPSTASH_EMAIL = "your-email@example.com"
+$env:UPSTASH_API_KEY = "your-upstash-api-key"
+
+# Initialize (runs shared first, then staging)
+python setup.py staging init
+
+# Apply (runs shared first, then staging)
+python setup.py staging apply
+
+# Destroy staging only (shared/ECR preserved)
+python setup.py staging destroy
+```
+
+**What gets created:**
+
+1. **Shared** (runs automatically):
+   - ECR repositories: `{project_name}-producer`, `{project_name}-consumer`
+   - ECR push policy for CI/CD
+
+2. **Staging**:
+   - S3 folders under `staging/papers/`
+   - SQS queue + DLQ
+   - Upstash Redis database
+   - SSM parameters (secrets stored as SecureString)
+   - ECS cluster + task definitions (producer, consumer)
+   - IAM roles and policies
+
+**Notes:**
+- `staging apply` automatically runs `shared apply` first
+- ECR image URLs are fetched from shared outputs
+- Producer/consumer configs come from `config.staging.json`
+- Secrets come from `.env` file
+- CloudWatch log groups are auto-created at `/ecs/{project_name}-staging/`
 
 ## Producer
 
@@ -492,4 +677,3 @@ uv run python main.py process
    ```
 
 4. Repeat step 3 as needed - no re-parsing required.
-
