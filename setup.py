@@ -44,6 +44,7 @@ def run_command(
     cmd: list[str],
     cwd: Path | None = None,
     capture_output: bool = False,
+    extra_env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """
     Run a command and handle errors.
@@ -52,6 +53,7 @@ def run_command(
         cmd: Command and arguments as list
         cwd: Working directory for the command
         capture_output: If True, capture stdout/stderr instead of streaming
+        extra_env: Additional environment variables to merge with current env
 
     Returns:
         CompletedProcess instance
@@ -59,6 +61,11 @@ def run_command(
     Raises:
         SystemExit: If command fails
     """
+    import os
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
     try:
         result = subprocess.run(
             cmd,
@@ -66,6 +73,7 @@ def run_command(
             capture_output=capture_output,
             text=True,
             check=True,
+            env=env,
         )
         return result
     except FileNotFoundError:
@@ -201,6 +209,7 @@ def bootstrap_apply() -> None:
     check_aws_cli()
 
     config = load_config()
+    github_config = config.get("github", {})
 
     print("\nRunning terraform apply...")
     run_command([
@@ -210,6 +219,10 @@ def bootstrap_apply() -> None:
         f"-var=aws_region={config['aws_region']}",
         f"-var=aws_account_id={config['aws_account_id']}",
         f"-var=bucket_name={config['bootstrap']['bucket_name']}",
+        f"-var=github_org={github_config['org']}",
+        f"-var=github_repository={github_config['repository']}",
+        f"-var=main_branch={github_config.get('main_branch', 'main')}",
+        f"-var=prod_branch={github_config.get('prod_branch', 'prod')}",
     ], cwd=BOOTSTRAP_DIR)
 
     print("\n=== Bootstrap Complete ===")
@@ -225,6 +238,7 @@ def bootstrap_destroy() -> None:
     check_aws_cli()
 
     config = load_config()
+    github_config = config.get("github", {})
 
     print("\nRunning terraform destroy...")
     run_command([
@@ -234,6 +248,10 @@ def bootstrap_destroy() -> None:
         f"-var=aws_region={config['aws_region']}",
         f"-var=aws_account_id={config['aws_account_id']}",
         f"-var=bucket_name={config['bootstrap']['bucket_name']}",
+        f"-var=github_org={github_config['org']}",
+        f"-var=github_repository={github_config['repository']}",
+        f"-var=main_branch={github_config.get('main_branch', 'main')}",
+        f"-var=prod_branch={github_config.get('prod_branch', 'prod')}",
     ], cwd=BOOTSTRAP_DIR)
 
     print("\n=== Destroy Complete ===")
@@ -456,6 +474,12 @@ def staging_apply() -> None:
     consumer_config = config.get("consumer", {})
     pinecone_config = config.get("pinecone", {})
 
+    # Upstash provider needs these as environment variables
+    upstash_env = {
+        "UPSTASH_EMAIL": env_vars["UPSTASH_EMAIL"],
+        "UPSTASH_API_KEY": env_vars["UPSTASH_API_KEY"],
+    }
+
     run_command([
         "terraform", "apply",
         "-auto-approve",
@@ -484,7 +508,7 @@ def staging_apply() -> None:
         f"-var=consumer_embedding_token_threshold={consumer_config.get('embedding_token_threshold', 6000)}",
         f"-var=consumer_pinecone_index_name={consumer_config.get('pinecone_index_name', 'ras-papers')}",
         f"-var=consumer_embedding_dimension={pinecone_config.get('embedding_dimension', '3072')}",
-    ], cwd=STAGING_DIR)
+    ], cwd=STAGING_DIR, extra_env=upstash_env)
 
     print("\n=== Staging Apply Complete ===")
 
@@ -514,6 +538,12 @@ def staging_destroy() -> None:
     consumer_config = config.get("consumer", {})
     pinecone_config = config.get("pinecone", {})
 
+    # Upstash provider needs these as environment variables
+    upstash_env = {
+        "UPSTASH_EMAIL": env_vars["UPSTASH_EMAIL"],
+        "UPSTASH_API_KEY": env_vars["UPSTASH_API_KEY"],
+    }
+
     run_command([
         "terraform", "destroy",
         "-auto-approve",
@@ -542,9 +572,198 @@ def staging_destroy() -> None:
         f"-var=consumer_embedding_token_threshold={consumer_config.get('embedding_token_threshold', 6000)}",
         f"-var=consumer_pinecone_index_name={consumer_config.get('pinecone_index_name', 'ras-papers')}",
         f"-var=consumer_embedding_dimension={pinecone_config.get('embedding_dimension', '3072')}",
-    ], cwd=STAGING_DIR)
+    ], cwd=STAGING_DIR, extra_env=upstash_env)
 
     print("\n=== Staging Destroy Complete ===")
+    print("\nNote: Shared infrastructure (ECR) was not destroyed.")
+    print("To destroy shared: manually run terraform destroy in terraform/envs/shared/")
+
+
+# =============================================================================
+# Production
+# =============================================================================
+
+PRODUCTION_REQUIRED_CONFIG = [
+    "project_name",
+    "aws_region",
+    "aws_account_id",
+    "bootstrap.bucket_name",
+]
+
+PRODUCTION_REQUIRED_ENV = [
+    "UNSTRUCTURED_API_KEY",
+    "UPSTASH_EMAIL",
+    "UPSTASH_API_KEY",
+    "PINECONE_API_KEY",
+    "OPENAI_API_KEY",
+]
+
+
+def production_init() -> None:
+    """Initialize terraform for production environment (runs shared first)."""
+    print("\n=== Production Init ===\n")
+    check_terraform()
+    check_aws_cli()
+
+    config = load_config("production")
+    validate_config(config, PRODUCTION_REQUIRED_CONFIG)
+
+    # Init shared first
+    shared_init(config)
+
+    # Generate backend config for production
+    backend_config = PRODUCTION_DIR / "production.tfbackend"
+    backend_content = f"""bucket = "{config['bootstrap']['bucket_name']}"
+key    = "production/terraform/terraform.tfstate"
+region = "{config['aws_region']}"
+"""
+    print(f"\nWriting backend config: {backend_config}")
+    backend_config.write_text(backend_content)
+
+    print("\nRunning terraform init for production...")
+    run_command([
+        "terraform", "init",
+        "-reconfigure",
+        "-backend-config=production.tfbackend",
+    ], cwd=PRODUCTION_DIR)
+
+    print("\n=== Production Init Complete ===")
+    print("\nNext: python setup.py production apply")
+
+
+def production_apply() -> None:
+    """Apply production infrastructure (runs shared first)."""
+    print("\n=== Production Apply ===\n")
+    check_terraform()
+    check_aws_cli()
+
+    config = load_config("production")
+    validate_config(config, PRODUCTION_REQUIRED_CONFIG)
+    env_vars = load_env(PRODUCTION_REQUIRED_ENV)
+
+    # Apply shared first
+    shared_apply(config)
+
+    # Get ECR URLs from shared output
+    print("\nGetting ECR repository URLs from shared...")
+    result = run_command([
+        "terraform", "output", "-json"
+    ], cwd=SHARED_DIR, capture_output=True)
+    shared_outputs = json.loads(result.stdout)
+    producer_image = shared_outputs["producer_repository_url"]["value"] + ":latest"
+    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":latest"
+
+    print(f"  Producer image: {producer_image}")
+    print(f"  Consumer image: {consumer_image}")
+
+    # Apply production
+    print("\nRunning terraform apply for production...")
+    redis_config = config.get("redis", {})
+    producer_config = config.get("producer", {})
+    consumer_config = config.get("consumer", {})
+    pinecone_config = config.get("pinecone", {})
+
+    # Upstash provider needs these as environment variables
+    upstash_env = {
+        "UPSTASH_EMAIL": env_vars["UPSTASH_EMAIL"],
+        "UPSTASH_API_KEY": env_vars["UPSTASH_API_KEY"],
+    }
+
+    run_command([
+        "terraform", "apply",
+        "-auto-approve",
+        f"-var=project_name={config['project_name']}",
+        f"-var=aws_region={config['aws_region']}",
+        f"-var=bucket_name={config['bootstrap']['bucket_name']}",
+        f"-var=redis_primary_region={redis_config.get('redis_primary_region', 'us-east-1')}",
+        f"-var=redis_tls={str(redis_config.get('redis_tls', True)).lower()}",
+        f"-var=producer_image={producer_image}",
+        f"-var=consumer_image={consumer_image}",
+        f"-var=unstructured_api_key={env_vars['UNSTRUCTURED_API_KEY']}",
+        f"-var=upstash_email={env_vars['UPSTASH_EMAIL']}",
+        f"-var=upstash_api_key={env_vars['UPSTASH_API_KEY']}",
+        f"-var=pinecone_api_key={env_vars['PINECONE_API_KEY']}",
+        f"-var=openai_api_key={env_vars['OPENAI_API_KEY']}",
+        # Producer env vars
+        f"-var=producer_arxiv_category={producer_config.get('arxiv_category', 'cs.AI,cs.LG,cs.CL')}",
+        f"-var=producer_max_results={producer_config.get('max_results', 10)}",
+        f"-var=producer_max_pages={producer_config.get('max_pages', 20)}",
+        # Consumer env vars
+        f"-var=consumer_mode={consumer_config.get('mode', 'full')}",
+        f"-var=consumer_chunk_max_characters={consumer_config.get('chunk_max_characters', 1500)}",
+        f"-var=consumer_chunk_new_after_n_chars={consumer_config.get('chunk_new_after_n_chars', 1000)}",
+        f"-var=consumer_chunk_combine_under_n_chars={consumer_config.get('chunk_combine_under_n_chars', 500)}",
+        f"-var=consumer_embedding_model={consumer_config.get('embedding_model', 'text-embedding-3-large')}",
+        f"-var=consumer_embedding_token_threshold={consumer_config.get('embedding_token_threshold', 6000)}",
+        f"-var=consumer_pinecone_index_name={consumer_config.get('pinecone_index_name', 'ras-papers')}",
+        f"-var=consumer_embedding_dimension={pinecone_config.get('embedding_dimension', '3072')}",
+    ], cwd=PRODUCTION_DIR, extra_env=upstash_env)
+
+    print("\n=== Production Apply Complete ===")
+
+
+def production_destroy() -> None:
+    """Destroy production infrastructure."""
+    print("\n=== Production Destroy ===\n")
+    check_terraform()
+    check_aws_cli()
+
+    config = load_config("production")
+    validate_config(config, PRODUCTION_REQUIRED_CONFIG)
+    env_vars = load_env(PRODUCTION_REQUIRED_ENV)
+
+    # Get ECR URLs from shared output
+    print("\nGetting ECR repository URLs from shared...")
+    result = run_command([
+        "terraform", "output", "-json"
+    ], cwd=SHARED_DIR, capture_output=True)
+    shared_outputs = json.loads(result.stdout)
+    producer_image = shared_outputs["producer_repository_url"]["value"] + ":latest"
+    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":latest"
+
+    print("\nRunning terraform destroy for production...")
+    redis_config = config.get("redis", {})
+    producer_config = config.get("producer", {})
+    consumer_config = config.get("consumer", {})
+    pinecone_config = config.get("pinecone", {})
+
+    # Upstash provider needs these as environment variables
+    upstash_env = {
+        "UPSTASH_EMAIL": env_vars["UPSTASH_EMAIL"],
+        "UPSTASH_API_KEY": env_vars["UPSTASH_API_KEY"],
+    }
+
+    run_command([
+        "terraform", "destroy",
+        "-auto-approve",
+        f"-var=project_name={config['project_name']}",
+        f"-var=aws_region={config['aws_region']}",
+        f"-var=bucket_name={config['bootstrap']['bucket_name']}",
+        f"-var=redis_primary_region={redis_config.get('redis_primary_region', 'us-east-1')}",
+        f"-var=redis_tls={str(redis_config.get('redis_tls', True)).lower()}",
+        f"-var=producer_image={producer_image}",
+        f"-var=consumer_image={consumer_image}",
+        f"-var=unstructured_api_key={env_vars['UNSTRUCTURED_API_KEY']}",
+        f"-var=upstash_email={env_vars['UPSTASH_EMAIL']}",
+        f"-var=upstash_api_key={env_vars['UPSTASH_API_KEY']}",
+        f"-var=pinecone_api_key={env_vars['PINECONE_API_KEY']}",
+        f"-var=openai_api_key={env_vars['OPENAI_API_KEY']}",
+        # Producer env vars
+        f"-var=producer_arxiv_category={producer_config.get('arxiv_category', 'cs.AI,cs.LG,cs.CL')}",
+        f"-var=producer_max_results={producer_config.get('max_results', 10)}",
+        f"-var=producer_max_pages={producer_config.get('max_pages', 20)}",
+        # Consumer env vars
+        f"-var=consumer_mode={consumer_config.get('mode', 'full')}",
+        f"-var=consumer_chunk_max_characters={consumer_config.get('chunk_max_characters', 1500)}",
+        f"-var=consumer_chunk_new_after_n_chars={consumer_config.get('chunk_new_after_n_chars', 1000)}",
+        f"-var=consumer_chunk_combine_under_n_chars={consumer_config.get('chunk_combine_under_n_chars', 500)}",
+        f"-var=consumer_embedding_model={consumer_config.get('embedding_model', 'text-embedding-3-large')}",
+        f"-var=consumer_embedding_token_threshold={consumer_config.get('embedding_token_threshold', 6000)}",
+        f"-var=consumer_pinecone_index_name={consumer_config.get('pinecone_index_name', 'ras-papers')}",
+        f"-var=consumer_embedding_dimension={pinecone_config.get('embedding_dimension', '3072')}",
+    ], cwd=PRODUCTION_DIR, extra_env=upstash_env)
+
+    print("\n=== Production Destroy Complete ===")
     print("\nNote: Shared infrastructure (ECR) was not destroyed.")
     print("To destroy shared: manually run terraform destroy in terraform/envs/shared/")
 
@@ -612,6 +831,22 @@ def main() -> None:
             staging_destroy()
         else:
             print(f"Unknown staging subcommand: {subcommand}")
+            sys.exit(1)
+
+    elif command == "production":
+        if len(sys.argv) < 3:
+            print("Usage: python setup.py production <init|apply|destroy>")
+            sys.exit(1)
+
+        subcommand = sys.argv[2]
+        if subcommand == "init":
+            production_init()
+        elif subcommand == "apply":
+            production_apply()
+        elif subcommand == "destroy":
+            production_destroy()
+        else:
+            print(f"Unknown production subcommand: {subcommand}")
             sys.exit(1)
 
     elif command in ["-h", "--help", "help"]:
