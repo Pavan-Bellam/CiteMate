@@ -6,6 +6,12 @@
   "bootstrap": {
     "bucket_name": "YOUR_BUCKET_NAME"
   },
+  "github": {
+    "org": "YOUR_GITHUB_ORG",
+    "repository": "YOUR_REPO_NAME",
+    "main_branch": "main",
+    "prod_branch": "prod"
+  },
   "producer": {
     "arxiv_category": "cs.LG",
     "max_results": 10,

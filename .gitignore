@@ -69,6 +69,8 @@ brainstorming/
 
 # Config (contains account-specific values)
 config.json
+config.staging.json
+config.production.json
 
 # Misc
 nul

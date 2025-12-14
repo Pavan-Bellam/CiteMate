@@ -10,7 +10,7 @@ class PineconeClient:
     """Client for storing vectors in Pinecone."""
 
     def __init__(self, api_key: str, index_name: str):
-        index_name = f"{index_name}-{os.getenv("EMBEDDING_DIMENSION")}"
+        index_name = f"{index_name}-{os.getenv("ENVIRONMENT")}-{os.getenv("EMBEDDING_DIMENSION")}"
         self.pc = Pinecone(api_key=api_key)
         self.index = self._get_index(index_name=index_name)
         self.index_name = index_name

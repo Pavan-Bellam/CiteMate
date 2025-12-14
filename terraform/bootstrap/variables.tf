@@ -23,3 +23,24 @@ variable "bucket_name" {
   description = "The name of the S3 bucket"
   type = string
 }
+
+
+variable "github_org" {
+  description = "The GitHub organization"
+  type = string
+}
+
+variable "github_repository" {
+  description = "The GitHub repository"
+  type = string
+}
+
+variable "main_branch" {
+  description = "The main branch"
+  type = string
+}
+
+variable "prod_branch" {
+  description = "The production branch"
+  type = string
+}
