@@ -218,3 +218,61 @@ resource "aws_iam_group_policy_attachment" "developers_assume_role" {
     group = aws_iam_group.developers.name
     policy_arn = aws_iam_policy.assume_developer_role_policy.arn
 }
+
+# create github oidc roles
+resource "aws_iam_role" "github_stage_oidc_role" {
+    name = "${var.project_name}-github-stage-oidc-role"
+    assume_role_policy = jsonencode({
+        Version = "2012-10-17"
+        Statement = [
+            {
+                Effect = "Allow"
+                Principal = {
+                    Federated = "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com"
+                }
+                Action = "sts:AssumeRoleWithWebIdentity"
+                Condition = {
+                    StringEquals = {
+                        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                        "token.actions.githubusercontent.com:sub": "repo:${var.github_org}/${var.github_repository}:ref:refs/heads/${var.main_branch}"
+                    }
+                }
+            }
+        ]
+    })
+}
+
+resource "aws_iam_role" "github_prod_oidc_role" {
+    name = "${var.project_name}-github-prod-oidc-role"
+    assume_role_policy = jsonencode({
+        Version = "2012-10-17"
+        Statement = [
+            {
+                Effect = "Allow"
+                Principal = {
+                    Federated = "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com"
+                }
+                Action = "sts:AssumeRoleWithWebIdentity"
+                Condition = {
+                    StringEquals = {
+                        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                        "token.actions.githubusercontent.com:sub": "repo:${var.github_org}/${var.github_repository}:ref:refs/heads/${var.prod_branch}"
+                    }
+                }
+            }
+        ]
+    })
+}
+
+
+# Attach policies to github oidc roles
+resource "aws_iam_role_policy_attachment" "github_stage_actions" {
+    role       = aws_iam_role.github_stage_oidc_role.name
+    policy_arn = aws_iam_policy.github_actions["staging"].arn
+}
+
+resource "aws_iam_role_policy_attachment" "github_prod_actions" {
+    role       = aws_iam_role.github_prod_oidc_role.name
+    policy_arn = aws_iam_policy.github_actions["production"].arn
+}
+
