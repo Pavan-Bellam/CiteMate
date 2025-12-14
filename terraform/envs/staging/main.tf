@@ -15,13 +15,6 @@ provider "upstash" {
   #$ export UPSTASH_API_KEY=<UPSTASH_API_KEY>
 }
 
-module "storage" {
-  source      = "../../modules/storage"
-  bucket_name = var.bucket_name
-  prefix      = "staging"
-  folders     = var.storage_folders
-}
-
 module "sqs" {
   source     = "../../modules/sqs"
   queue_name = "${var.project_name}-staging-papers"
