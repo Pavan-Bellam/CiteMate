@@ -10,7 +10,6 @@ ras/
 ├── terraform/
 │   ├── bootstrap/       # One-time setup (S3 bucket, IAM roles)
 │   ├── modules/
-│   │   ├── storage/     # S3 folder creation
 │   │   ├── ecr/         # ECR repository + push policy
 │   │   ├── sqs/         # SQS queue + DLQ
 │   │   ├── redis/       # Upstash Redis database
@@ -34,11 +33,18 @@ ras/
   "username": "YOUR_IAM_USERNAME",
   "bootstrap": {
     "bucket_name": "YOUR_BUCKET_NAME"
+  },
+  "github": {
+    "org": "YOUR_GITHUB_ORG",
+    "repository": "YOUR_REPO_NAME",
+    "main_branch": "main",
+    "prod_branch": "prod"
   }
 }
 ```
 
-Set `username` to your IAM username before running local setup.
+- Set `username` to your IAM username before running local setup.
+- Set `github` config for CI/CD OIDC authentication (used by bootstrap).
 
 
 ## Infrastructure
@@ -52,9 +58,11 @@ Run once by an admin to create shared infrastructure. Uses local state (not remo
 **Files:**
 - `main.tf` - AWS provider config with default tags (Project, Environment=bootstrap)
 - `versions.tf` - Requires Terraform >= 1.5.0, AWS provider >= 6.0.0
-- `variables.tf` - Input variables (project_name, aws_region, aws_account_id, bucket_name)
+- `variables.tf` - Input variables (project_name, aws_region, aws_account_id, bucket_name, github_org, github_repository, main_branch, prod_branch)
+- `oidc.tf` - GitHub Actions OIDC identity provider
+- `iam_policy.tf` - IAM policies for GitHub Actions CI/CD
 - `s3.tf` - Creates the shared S3 bucket with versioning enabled
-- `iam.tf` - Creates developer role, policies, and group
+- `iam.tf` - Creates developer role, policies, group, and GitHub OIDC roles
 - `locals.tf` - (empty)
 
 **Resources Created:**
@@ -83,24 +91,28 @@ Run once by an admin to create shared infrastructure. Uses local state (not remo
    - Members can assume the developer role
    - Add IAM users to this group to grant access
 
-#### modules/storage/
+6. **GitHub OIDC Provider** (`aws_iam_openid_connect_provider.oidc`)
+   - URL: `https://token.actions.githubusercontent.com`
+   - Allows GitHub Actions to assume IAM roles without long-lived credentials
 
-Creates S3 folder objects under a given prefix.
+7. **GitHub Staging OIDC Role** (`ras-github-stage-oidc-role`)
+   - Assumable by GitHub Actions from the `main` branch
+   - Used for deploying staging infrastructure
+   - Trust policy restricts to specific repo and branch
 
-**Files:**
-- `s3.tf` - Creates empty S3 objects as folder placeholders
-- `variables.tf` - bucket_name, prefix, folders (list)
-- `outputs.tf` - folder_keys, bucket_name
+8. **GitHub Production OIDC Role** (`ras-github-prod-oidc-role`)
+   - Assumable by GitHub Actions from the `prod` branch
+   - Used for deploying production infrastructure
+   - Trust policy restricts to specific repo and branch
 
-**Usage:**
-```hcl
-module "storage" {
-  source      = "../../modules/storage"
-  bucket_name = var.bucket_name
-  prefix      = "development/${var.developer}"
-  folders     = ["papers", "models"]
-}
-```
+9. **GitHub Actions Policies** (`ras-github-actions-staging`, `ras-github-actions-production`)
+   - Terraform state access (S3)
+   - ECR push/pull
+   - SSM parameter management
+   - ECS cluster and task management
+   - IAM role/policy management (scoped to environment prefix)
+   - CloudWatch log groups
+   - EventBridge scheduler
 
 #### modules/ecr/
 
@@ -288,7 +300,6 @@ Per-developer environment configuration.
 - Developer: `{developer variable}`
 
 **Modules Used:**
-- `storage` - Creates folders under `development/{developer}/`
 - `sqs` - Creates SQS queue for paper processing
 - `redis` - Creates Upstash Redis for chunk batching
 
@@ -466,7 +477,6 @@ python setup.py staging destroy
    - ECR push policy for CI/CD
 
 2. **Staging**:
-   - S3 folders under `staging/papers/`
    - SQS queue + DLQ
    - Upstash Redis database
    - SSM parameters (secrets stored as SecureString)
@@ -677,3 +687,23 @@ uv run python main.py process
    ```
 
 4. Repeat step 3 as needed - no re-parsing required.
+
+
+ecs push commands for consumer:
+
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 455095159948.dkr.ecr.us-east-1.amazonaws.com
+
+docker build -t ras-consumer .
+
+docker tag ras-consumer:latest 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:latest
+
+docker push 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:latest
+
+producer:
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 455095159948.dkr.ecr.us-east-1.amazonaws.com
+
+docker build -t ras-producer .
+
+docker tag ras-producer:latest 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-producer:latest
+
+docker push 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-producer:latest
