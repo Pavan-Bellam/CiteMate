@@ -420,10 +420,10 @@ GitHub Actions workflows automate deployments to staging and production using OI
 
 ### Workflows
 
-| Workflow | Trigger | Environment | IAM Role |
-|----------|---------|-------------|----------|
-| `deploy-staging.yml` | Push to `main` or manual | Staging | `{project_name}-github-stage-oidc-role` |
-| `deploy-production.yml` | Push to `prod` or manual | Production | `{project_name}-github-prod-oidc-role` |
+| Workflow | Trigger | Environment | Image Tag |
+|----------|---------|-------------|-----------|
+| `deploy-staging.yml` | Push to `main` or manual | Staging | `:staging` |
+| `deploy-production.yml` | Push to `prod` or manual | Production | `:prod` |
 
 ### GitHub Secrets Required
 
@@ -444,8 +444,9 @@ Add these in **Repository → Settings → Secrets and variables → Actions**:
 1. Workflow reads config from `config.staging.json` or `config.production.json`
 2. Authenticates to AWS via OIDC using the GitHub OIDC role
 3. Creates `.env` file from GitHub Secrets
-4. Runs `python setup.py {environment} init`
-5. Runs `python setup.py {environment} apply`
+4. Runs `python setup.py {environment} init` and `apply` (deploys shared + environment infrastructure)
+5. Gets ECR repository URLs from shared terraform output
+6. Builds and pushes producer/consumer Docker images to ECR with environment-specific tags
 
 ### Config Files
 
@@ -744,21 +745,23 @@ uv run python main.py process
 4. Repeat step 3 as needed - no re-parsing required.
 
 
-ecs push commands for consumer:
+### Manual ECR Push (if needed)
 
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 455095159948.dkr.ecr.us-east-1.amazonaws.com
+CI/CD handles image builds automatically, but for manual pushes:
 
-docker build -t ras-consumer .
+```bash
+# Login to ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin {account_id}.dkr.ecr.us-east-1.amazonaws.com
 
-docker tag ras-consumer:latest 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:latest
+# Producer
+cd ingestion/producer
+docker build -t {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-producer:{tag} .
+docker push {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-producer:{tag}
 
-docker push 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:latest
+# Consumer
+cd ingestion/consumer
+docker build -t {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:{tag} .
+docker push {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:{tag}
+```
 
-producer:
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 455095159948.dkr.ecr.us-east-1.amazonaws.com
-
-docker build -t ras-producer .
-
-docker tag ras-producer:latest 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-producer:latest
-
-docker push 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-producer:latest
+**Tags:** Use `:staging` for staging, `:prod` for production.
