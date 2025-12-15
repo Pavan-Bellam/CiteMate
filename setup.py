@@ -461,8 +461,8 @@ def staging_apply() -> None:
         "terraform", "output", "-json"
     ], cwd=SHARED_DIR, capture_output=True)
     shared_outputs = json.loads(result.stdout)
-    producer_image = shared_outputs["producer_repository_url"]["value"] + ":latest"
-    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":latest"
+    producer_image = shared_outputs["producer_repository_url"]["value"] + ":staging"
+    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":staging"
 
     print(f"  Producer image: {producer_image}")
     print(f"  Consumer image: {consumer_image}")
@@ -529,8 +529,8 @@ def staging_destroy() -> None:
         "terraform", "output", "-json"
     ], cwd=SHARED_DIR, capture_output=True)
     shared_outputs = json.loads(result.stdout)
-    producer_image = shared_outputs["producer_repository_url"]["value"] + ":latest"
-    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":latest"
+    producer_image = shared_outputs["producer_repository_url"]["value"] + ":staging"
+    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":staging"
 
     print("\nRunning terraform destroy for staging...")
     redis_config = config.get("redis", {})
@@ -650,8 +650,8 @@ def production_apply() -> None:
         "terraform", "output", "-json"
     ], cwd=SHARED_DIR, capture_output=True)
     shared_outputs = json.loads(result.stdout)
-    producer_image = shared_outputs["producer_repository_url"]["value"] + ":latest"
-    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":latest"
+    producer_image = shared_outputs["producer_repository_url"]["value"] + ":prod"
+    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":prod"
 
     print(f"  Producer image: {producer_image}")
     print(f"  Consumer image: {consumer_image}")
@@ -718,8 +718,8 @@ def production_destroy() -> None:
         "terraform", "output", "-json"
     ], cwd=SHARED_DIR, capture_output=True)
     shared_outputs = json.loads(result.stdout)
-    producer_image = shared_outputs["producer_repository_url"]["value"] + ":latest"
-    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":latest"
+    producer_image = shared_outputs["producer_repository_url"]["value"] + ":prod"
+    consumer_image = shared_outputs["consumer_repository_url"]["value"] + ":prod"
 
     print("\nRunning terraform destroy for production...")
     redis_config = config.get("redis", {})
