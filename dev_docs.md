@@ -4,11 +4,17 @@
 
 ```
 ras/
-├── config.json          # Project configuration
-├── setup.py             # Setup and deployment scripts
-├── assume_role.py       # Assume developer role (get temp credentials)
+├── config.json              # Local development config
+├── config.staging.json      # Staging environment config
+├── config.production.json   # Production environment config
+├── setup.py                 # Setup and deployment scripts
+├── assume_role.py           # Assume developer role (get temp credentials)
+├── .github/
+│   └── workflows/
+│       ├── deploy-staging.yml     # CI/CD for staging (main branch)
+│       └── deploy-production.yml  # CI/CD for production (prod branch)
 ├── terraform/
-│   ├── bootstrap/       # One-time setup (S3 bucket, IAM roles)
+│   ├── bootstrap/       # One-time setup (S3 bucket, IAM roles, OIDC)
 │   ├── modules/
 │   │   ├── ecr/         # ECR repository + push policy
 │   │   ├── sqs/         # SQS queue + DLQ
@@ -16,7 +22,10 @@ ras/
 │   │   ├── ecs/         # ECS cluster + task definitions
 │   │   └── ssm/         # SSM Parameter Store secrets
 │   └── envs/
-│       └── development/ # Environment-specific config
+│       ├── development/ # Per-developer environment
+│       ├── shared/      # Shared resources (ECR)
+│       ├── staging/     # Staging environment
+│       └── production/  # Production environment
 └── ingestion/
     ├── producer/        # ArXiv paper fetcher
     └── consumer/        # PDF parser, chunker, embedder
@@ -24,7 +33,7 @@ ras/
 
 ## Configuration
 
-`config.json` in root (copy from `config.example.json`):
+`config.json` in root:
 ```json
 {
   "project_name": "ras",
@@ -405,13 +414,60 @@ python setup.py dev destroy  # terraform destroy
    aws iam add-user-to-group --group-name ras-developers --user-name {username}
    ```
 
-#### Staging Environment
+## CI/CD Pipelines
 
-Deploy staging infrastructure with ECS, SSM secrets, and all supporting resources.
+GitHub Actions workflows automate deployments to staging and production using OIDC authentication (no AWS credentials stored in GitHub).
+
+### Workflows
+
+| Workflow | Trigger | Environment | Image Tag |
+|----------|---------|-------------|-----------|
+| `deploy-staging.yml` | Push to `main` or manual | Staging | `:staging` |
+| `deploy-production.yml` | Push to `prod` or manual | Production | `:prod` |
+
+### GitHub Secrets Required
+
+Add these in **Repository → Settings → Secrets and variables → Actions**:
+
+| Secret | Description |
+|--------|-------------|
+| `UNSTRUCTURED_API_KEY` | Unstructured.io API key |
+| `UPSTASH_EMAIL` | Upstash account email |
+| `UPSTASH_API_KEY` | Upstash API key |
+| `PINECONE_API_KEY` | Pinecone API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+
+**Note:** AWS credentials are NOT needed - OIDC authentication is used.
+
+### How It Works
+
+1. Workflow reads config from `config.staging.json` or `config.production.json`
+2. Authenticates to AWS via OIDC using the GitHub OIDC role
+3. Creates `.env` file from GitHub Secrets
+4. Runs `python setup.py {environment} init` and `apply` (deploys shared + environment infrastructure)
+5. Gets ECR repository URLs from shared terraform output
+6. Builds and pushes producer/consumer Docker images to ECR with environment-specific tags
+
+### Config Files
+
+Config files are tracked in git (not secrets):
+- `config.json` - Local development
+- `config.staging.json` - Staging environment
+- `config.production.json` - Production environment
+
+### Manual Deployment
+
+Workflows can be triggered manually via **Actions → Deploy Staging/Production → Run workflow**.
+
+---
+
+#### Staging Environment (Local)
+
+Deploy staging infrastructure locally with ECS, SSM secrets, and all supporting resources.
 
 **Prerequisites:**
 
-1. Create `config.staging.json` (copy from `config.json`):
+1. Create `config.staging.json`:
    ```json
    {
      "project_name": "ras",
@@ -689,21 +745,23 @@ uv run python main.py process
 4. Repeat step 3 as needed - no re-parsing required.
 
 
-ecs push commands for consumer:
+### Manual ECR Push (if needed)
 
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 455095159948.dkr.ecr.us-east-1.amazonaws.com
+CI/CD handles image builds automatically, but for manual pushes:
 
-docker build -t ras-consumer .
+```bash
+# Login to ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin {account_id}.dkr.ecr.us-east-1.amazonaws.com
 
-docker tag ras-consumer:latest 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:latest
+# Producer
+cd ingestion/producer
+docker build -t {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-producer:{tag} .
+docker push {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-producer:{tag}
 
-docker push 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:latest
+# Consumer
+cd ingestion/consumer
+docker build -t {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:{tag} .
+docker push {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:{tag}
+```
 
-producer:
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 455095159948.dkr.ecr.us-east-1.amazonaws.com
-
-docker build -t ras-producer .
-
-docker tag ras-producer:latest 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-producer:latest
-
-docker push 455095159948.dkr.ecr.us-east-1.amazonaws.com/ras-producer:latest
+**Tags:** Use `:staging` for staging, `:prod` for production.

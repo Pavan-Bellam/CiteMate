@@ -1,0 +1,88 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read config
+        id: config
+        run: |
+          echo "aws_region=$(jq -r '.aws_region' config.production.json)" >> $GITHUB_OUTPUT
+          echo "aws_account_id=$(jq -r '.aws_account_id' config.production.json)" >> $GITHUB_OUTPUT
+          echo "project_name=$(jq -r '.project_name' config.production.json)" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ steps.config.outputs.aws_account_id }}:role/${{ steps.config.outputs.project_name }}-github-prod-oidc-role
+          aws-region: ${{ steps.config.outputs.aws_region }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Create .env file
+        run: |
+          cat > .env <<EOF
+          UNSTRUCTURED_API_KEY=${{ secrets.UNSTRUCTURED_API_KEY }}
+          UPSTASH_EMAIL=${{ secrets.UPSTASH_EMAIL }}
+          UPSTASH_API_KEY=${{ secrets.UPSTASH_API_KEY }}
+          PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          EOF
+
+      - name: Deploy Infrastructure
+        run: |
+          python setup.py production init
+          python setup.py production apply
+
+      - name: Get ECR URLs
+        id: ecr
+        working-directory: terraform/envs/shared
+        run: |
+          echo "producer_repo=$(terraform output -raw producer_repository_url)" >> $GITHUB_OUTPUT
+          echo "consumer_repo=$(terraform output -raw consumer_repository_url)" >> $GITHUB_OUTPUT
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ steps.config.outputs.aws_region }} | \
+            docker login --username AWS --password-stdin ${{ steps.config.outputs.aws_account_id }}.dkr.ecr.${{ steps.config.outputs.aws_region }}.amazonaws.com
+
+      - name: Build and Push Producer
+        working-directory: ingestion/producer
+        run: |
+          docker build -t ${{ steps.ecr.outputs.producer_repo }}:prod .
+          docker push ${{ steps.ecr.outputs.producer_repo }}:prod
+
+      - name: Build and Push Consumer
+        working-directory: ingestion/consumer
+        run: |
+          docker build -t ${{ steps.ecr.outputs.consumer_repo }}:prod .
+          docker push ${{ steps.ecr.outputs.consumer_repo }}:prod
+
+      - name: Deployment Summary
+        run: |
+          echo "## Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Producer Image:** ${{ steps.ecr.outputs.producer_repo }}:prod" >> $GITHUB_STEP_SUMMARY
+          echo "**Consumer Image:** ${{ steps.ecr.outputs.consumer_repo }}:prod" >> $GITHUB_STEP_SUMMARY

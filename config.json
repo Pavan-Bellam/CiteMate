@@ -1,0 +1,37 @@
+{
+  "project_name": "ras",
+  "aws_region": "us-east-1",
+  "aws_account_id": "455095159948",
+  "username": "ras-dev",
+  "bootstrap": {
+    "bucket_name": "ras-1437"
+  },
+  "producer": {
+    "arxiv_category": "cs.AI,cs.LG,cs.CL",
+    "max_results": 10,
+    "max_pages": 20
+  },
+  "consumer": {
+    "chunk_max_characters": 1500,
+    "chunk_new_after_n_chars": 1000,
+    "chunk_combine_under_n_chars": 500,
+    "embedding_model": "text-embedding-3-large",
+    "embedding_token_threshold": 6000,
+    "pinecone_index_name": "ras-papers"
+  },
+
+  "redis": {
+    "redis_db_name": "ras-dev",
+    "redis_primary_region": "us-east-1",
+    "redis_tls": true
+  },
+  "pinecone": {
+    "embedding_dimension" : "3072"
+  },
+  "github": {
+    "org": "Pavan-Bellam",
+    "repository": "ras",
+    "main_branch": "main",
+    "prod_branch": "prod"
+  }
+}
