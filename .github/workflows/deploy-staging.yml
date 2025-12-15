@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   deploy-staging:
+    if: false  # Disabled temporarily
     runs-on: ubuntu-latest
 
     steps:

@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   deploy-production:
+    if: false  # Disabled temporarily
     runs-on: ubuntu-latest
 
     steps:
