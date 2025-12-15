@@ -1,19 +1,18 @@
 {
   "project_name": "ras",
   "aws_region": "us-east-1",
-  "aws_account_id": "YOUR_ACCOUNT_ID",
-  "username": "YOUR_IAM_USERNAME",
+  "aws_account_id": "455095159948",
   "bootstrap": {
-    "bucket_name": "YOUR_BUCKET_NAME"
+    "bucket_name": "ras-1437"
   },
   "github": {
-    "org": "YOUR_GITHUB_ORG",
-    "repository": "YOUR_REPO_NAME",
+    "org": "Pavan-Bellam",
+    "repository": "ras",
     "main_branch": "main",
     "prod_branch": "prod"
   },
   "producer": {
-    "arxiv_category": "cs.LG",
+    "arxiv_category": "cs.AI,cs.LG,cs.CL",
     "max_results": 10,
     "max_pages": 20
   },
@@ -21,16 +20,15 @@
     "chunk_max_characters": 1500,
     "chunk_new_after_n_chars": 1000,
     "chunk_combine_under_n_chars": 500,
-    "embedding_model": "text-embedding-3-small",
-    "embedding_token_threshold": 8000,
-    "pinecone_index_name": "YOUR_INDEX_NAME"
+    "embedding_model": "text-embedding-3-large",
+    "embedding_token_threshold": 6000,
+    "pinecone_index_name": "ras-papers"
   },
   "redis": {
-    "redis_db_name": "YOUR_REDIS_DB_NAME",
     "redis_primary_region": "us-east-1",
     "redis_tls": true
   },
   "pinecone": {
-    "embedding_dimension": "1536"
+    "embedding_dimension": "3072"
   }
 }
