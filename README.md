@@ -14,7 +14,7 @@ A RAG system for academic paper literature surveys.
 - Terraform 1.5+
 - AWS CLI configured with credentials
 
-## Setup
+## Quick Start
 
 ### 1. Configure
 
@@ -54,20 +54,40 @@ python setup.py dev apply
 
 Re-run `assume_role.py` when credentials expire (1 hour).
 
-Get Upstash credentials from [Upstash Console](https://console.upstash.com/account/api).
+## CI/CD Pipelines
+
+Deployments are automated via GitHub Actions using OIDC authentication.
+
+| Branch | Environment | Workflow |
+|--------|-------------|----------|
+| `main` | Staging | `deploy-staging.yml` |
+| `prod` | Production | `deploy-production.yml` |
+
+### GitHub Secrets Required
+
+Add in **Repository → Settings → Secrets and variables → Actions**:
+
+- `UNSTRUCTURED_API_KEY`
+- `UPSTASH_EMAIL`
+- `UPSTASH_API_KEY`
+- `PINECONE_API_KEY`
+- `OPENAI_API_KEY`
+
+No AWS credentials needed - OIDC handles authentication.
+
+### Manual Trigger
+
+Workflows can also be triggered manually via **Actions → Run workflow**.
 
 ## Commands
 
 ### Infrastructure (setup.py)
 
 ```
-python setup.py bootstrap init    - Initialize bootstrap terraform
-python setup.py bootstrap apply   - Apply bootstrap infrastructure
-python setup.py bootstrap destroy - Destroy bootstrap infrastructure
-
-python setup.py dev init          - Initialize dev terraform
-python setup.py dev apply         - Apply dev infrastructure
-python setup.py dev destroy       - Destroy dev infrastructure
+python setup.py bootstrap init/apply/destroy  - Bootstrap (admin)
+python setup.py dev init/apply/destroy        - Dev environment
+python setup.py staging init/apply/destroy    - Staging environment
+python setup.py production init/apply/destroy - Production environment
 ```
 
 ### Services (run.py)
@@ -87,32 +107,24 @@ python run.py consumer down           - Stop consumer container
 - `process` - Load raw elements from S3, chunk, embed, store to Pinecone
 - `full` - Parse and process in one pipeline (default)
 
-Requires AWS credentials (run `python assume_role.py | Invoke-Expression` first).
+## Configuration Files
 
-### Environment Variables
+| File | Purpose |
+|------|---------|
+| `config.json` | Local development |
+| `config.staging.json` | Staging environment |
+| `config.production.json` | Production environment |
 
-Create a `.env` file in the project root for secrets:
+## Environment Variables
+
+Create a `.env` file in the project root for local development:
 
 ```
-# Unstructured API (for PDF parsing)
 UNSTRUCTURED_API_KEY=your-api-key
-
-# Redis (from Terraform output or Upstash console)
-REDIS_URL=rediss://default:xxx@xxx.upstash.io:6379
-
-# OpenAI (for embeddings)
-OPENAI_API_KEY=sk-xxx
-
-# Pinecone (for vector storage)
+UPSTASH_EMAIL=your-email
+UPSTASH_API_KEY=your-api-key
 PINECONE_API_KEY=xxx
-```
-
-Docker-compose automatically loads this file.
-
-**For Terraform** (set in shell, not .env):
-```powershell
-$env:UPSTASH_EMAIL = "your-email"
-$env:UPSTASH_API_KEY = "your-api-key"
+OPENAI_API_KEY=sk-xxx
 ```
 
 ## Documentation
