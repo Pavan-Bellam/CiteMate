@@ -51,13 +51,38 @@ jobs:
           OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
           EOF
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
-
-      - name: Deploy Staging
+      - name: Deploy Infrastructure
         run: |
           python setup.py staging init
           python setup.py staging apply
 
+      - name: Get ECR URLs
+        id: ecr
+        working-directory: terraform/envs/shared
+        run: |
+          echo "producer_repo=$(terraform output -raw producer_repository_url)" >> $GITHUB_OUTPUT
+          echo "consumer_repo=$(terraform output -raw consumer_repository_url)" >> $GITHUB_OUTPUT
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ steps.config.outputs.aws_region }} | \
+            docker login --username AWS --password-stdin ${{ steps.config.outputs.aws_account_id }}.dkr.ecr.${{ steps.config.outputs.aws_region }}.amazonaws.com
+
+      - name: Build and Push Producer
+        working-directory: ingestion/producer
+        run: |
+          docker build -t ${{ steps.ecr.outputs.producer_repo }}:staging .
+          docker push ${{ steps.ecr.outputs.producer_repo }}:staging
+
+      - name: Build and Push Consumer
+        working-directory: ingestion/consumer
+        run: |
+          docker build -t ${{ steps.ecr.outputs.consumer_repo }}:staging .
+          docker push ${{ steps.ecr.outputs.consumer_repo }}:staging
+
       - name: Deployment Summary
-        run: echo "## Staging Deployment Complete" >> $GITHUB_STEP_SUMMARY
+        run: |
+          echo "## Staging Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Producer Image:** ${{ steps.ecr.outputs.producer_repo }}:staging" >> $GITHUB_STEP_SUMMARY
+          echo "**Consumer Image:** ${{ steps.ecr.outputs.consumer_repo }}:staging" >> $GITHUB_STEP_SUMMARY
