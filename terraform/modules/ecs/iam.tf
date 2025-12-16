@@ -68,9 +68,22 @@ resource "aws_iam_policy" "producer_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "s3:PutObject"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject"
+        ]
         Resource = "arn:aws:s3:::${var.bucket_name}/${var.environment}/papers/pdfs/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = "arn:aws:s3:::${var.bucket_name}"
+        Condition = {
+          StringLike = {
+            "s3:prefix" : "${var.environment}/papers/pdfs/*"
+          }
+        }
       },
       {
         Effect = "Allow"

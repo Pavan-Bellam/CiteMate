@@ -36,8 +36,8 @@ resource "aws_ecs_task_definition" "consumer" {
   family                   = "${var.project_name}-${var.environment}-consumer"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 256
-  memory                   = 512
+  cpu                      = 512
+  memory                   = 1024
   execution_role_arn       = aws_iam_role.ecs_execution_role.arn
   task_role_arn            = aws_iam_role.consumer_role.arn
   container_definitions = jsonencode([
@@ -49,6 +49,7 @@ resource "aws_ecs_task_definition" "consumer" {
         { name = "BUCKET_NAME", value = var.bucket_name },
         { name = "BUCKET_PREFIX", value = "${var.environment}/papers" },
         { name = "QUEUE_URL", value = var.sqs_queue_url },
+        { name = "ENVIRONMENT", value = var.environment },
         { name = "MODE", value = var.consumer_env.mode },
         { name = "CHUNK_MAX_CHARACTERS", value = tostring(var.consumer_env.chunk_max_characters) },
         { name = "CHUNK_NEW_AFTER_N_CHARS", value = tostring(var.consumer_env.chunk_new_after_n_chars) },
