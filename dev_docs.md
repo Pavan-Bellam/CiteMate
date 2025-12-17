@@ -630,8 +630,10 @@ ingestion/consumer/
 │   ├── sqs_client.py    # SQS receive/delete
 │   ├── unstructured_client.py  # PDF parsing + chunking
 │   ├── redis_client.py  # Chunk batching with token threshold
-│   ├── openai_client.py # Embedding generation
-│   ├── pinecone_client.py # Vector storage
+│   ├── openai_client.py # Dense embedding generation (OpenAI)
+│   ├── bm25_client.py   # Sparse embedding generation (BM25)
+│   ├── bm25_encoder.json # Pre-trained BM25 encoder
+│   ├── pinecone_client.py # Vector storage (dense + sparse indices)
 │   └── logger.py        # Logging setup
 ├── Dockerfile           # uv + Python 3.12
 └── pyproject.toml       # Dependencies
@@ -659,11 +661,29 @@ The consumer supports three modes for flexibility during development:
 **Process mode:**
 1. Lists all raw element files in S3
 2. For each paper: load elements → chunk → push to Redis
-3. When token threshold reached: embed batch → store in Pinecone
+3. When token threshold reached:
+   - Generate dense embeddings (OpenAI)
+   - Generate sparse vectors (BM25)
+   - Store in separate Pinecone indices (dense + sparse)
 4. Flush remaining chunks at end
 
 **Full mode:**
 Combines parse and process in one continuous pipeline.
+
+### Hybrid Search (Dense + Sparse)
+
+The consumer generates both dense and sparse vectors for hybrid search:
+
+| Vector Type | Source | Pinecone Index | Metric |
+|-------------|--------|----------------|--------|
+| Dense | OpenAI `text-embedding-3-large` | `{name}-dense-{env}-{dim}` | cosine |
+| Sparse | BM25 (pinecone-text) | `{name}-sparse-{env}` | dotproduct |
+
+**Index naming example** (with `PINECONE_INDEX_NAME=ras-papers`, `ENVIRONMENT=staging`, `EMBEDDING_DIMENSION=3072`):
+- Dense: `ras-papers-dense-staging-3072`
+- Sparse: `ras-papers-sparse-staging`
+
+Both indices store the same vector IDs and metadata, enabling hybrid retrieval at query time.
 
 ### Environment Variables
 
@@ -682,8 +702,9 @@ Combines parse and process in one continuous pipeline.
 | `OPENAI_API_KEY` | OpenAI API key | your API key |
 | `EMBEDDING_MODEL` | OpenAI embedding model | `text-embedding-3-large` |
 | `PINECONE_API_KEY` | Pinecone API key | your API key |
-| `PINECONE_INDEX_NAME` | Pinecone index name | `ras-papers` |
+| `PINECONE_INDEX_NAME` | Pinecone index base name | `ras-papers` |
 | `EMBEDDING_DIMENSION` | Embedding vector dimension | `3072` |
+| `ENVIRONMENT` | Environment name (used in index naming) | `dev`, `staging`, `prod` |
 
 ### Running with run.py
 
@@ -765,3 +786,7 @@ docker push {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:{tag}
 ```
 
 **Tags:** Use `:staging` for staging, `:prod` for production.
+
+## TODO
+
+- [x] Add sparse vectors (BM25) to ingestion pipeline for hybrid search
