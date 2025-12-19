@@ -765,6 +765,113 @@ uv run python main.py process
 
 4. Repeat step 3 as needed - no re-parsing required.
 
+## Retrieval Service
+
+The retrieval service provides flexible search capabilities over the ingested papers using semantic, BM25, or hybrid approaches.
+
+### Architecture
+
+The retrieval service uses a **dual-index architecture** with separate Pinecone indices:
+
+| Index Type | Vector Source | Pinecone Index URL | Metric |
+|------------|---------------|-------------------|--------|
+| **Dense** | OpenAI `text-embedding-3-large` | `retrieval.dense_index_url` | cosine |
+| **Sparse** | BM25 (pinecone-text) | `retrieval.sparse_index_url` | dotproduct |
+
+Both indices store the same vector IDs and metadata, enabling flexible retrieval strategies at query time.
+
+### Retrieval Modes
+
+The service supports three retrieval modes:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `semantic` | Dense vector search using OpenAI embeddings | Conceptual similarity, semantic understanding |
+| `bm25` | Sparse vector search using BM25 term matching | Keyword-based retrieval, exact term matches |
+| `hybrid` | Combines semantic + BM25 using Reciprocal Rank Fusion (RRF) | Best overall performance, balances semantic and lexical matching |
+
+### Reranking
+
+Optional reranking can be applied to improve result quality:
+
+- **Candidate Fetching**: Fetches `initial_k=20` candidates from the index(es)
+- **Reranking**: Applies a reranker model to score and re-order candidates
+- **Final Results**: Returns top `rerank_top_n` results
+
+**Supported Reranker Models:**
+- `pinecone-rerank-v0` - Pinecone's reranking model
+- `cohere-rerank-3.5` - Cohere's latest reranker
+- `bge-reranker-v2-m3` - BGE reranker model
+
+### Configuration
+
+Configuration is in `config.json` under the `retrieval` section:
+
+```json
+{
+  "retrieval": {
+    "dense_index_url": "https://...",
+    "sparse_index_url": "https://...",
+    "embedding_model": "text-embedding-3-large",
+    "bm25_encoder_path": "bm25_encoder.json",
+    "default_mode": "hybrid",
+    "top_k": 50,
+    "rrf_k": 60,
+    "rerank_enabled": false,
+    "rerank_model": "bge-reranker-v2-m3",
+    "rerank_top_n": 10
+  }
+}
+```
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `dense_index_url` | Pinecone dense index host URL | Required |
+| `sparse_index_url` | Pinecone sparse index host URL | Required |
+| `embedding_model` | OpenAI embedding model for queries | `text-embedding-3-large` |
+| `bm25_encoder_path` | Path to pre-trained BM25 encoder | `bm25_encoder.json` |
+| `default_mode` | Default retrieval mode | `hybrid` |
+| `top_k` | Number of results to return | `50` |
+| `rrf_k` | RRF parameter (controls rank fusion) | `60` |
+| `rerank_enabled` | Enable reranking | `false` |
+| `rerank_model` | Reranker model to use | `bge-reranker-v2-m3` |
+| `rerank_top_n` | Number of reranked results | `10` |
+
+### Environment Variables
+
+The retrieval service requires the following environment variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `PINECONE_API_KEY` | Pinecone API key | `pcsk_xxx` |
+
+
+
+### Evaluation Results
+
+Performance metrics on a test set of 303 queries (Hit@K, MRR, and latency):
+
+| Configuration | Hit@1 | Hit@5 | Hit@10 | MRR | Avg Latency (ms) | P50 Latency (ms) | P95 Latency (ms) |
+|--------------|-------|-------|--------|-----|------------------|------------------|------------------|
+| **semantic** | 0.726 | 0.871 | 0.911 | 0.788 | 527 | 482 | 758 |
+| **bm25** | 0.756 | 0.881 | 0.914 | 0.808 | 102 | 102 | 169 |
+| **hybrid** | **0.785** | **0.904** | **0.944** | **0.835** | 500 | 453 | 711 |
+| semantic+pinecone-rerank-v0 | **0.828** | 0.917 | 0.931 | **0.866** | 1182 | 1064 | 1356 |
+| semantic+cohere-rerank-3.5 | 0.805 | 0.911 | 0.934 | 0.849 | 1011 | 769 | 1851 |
+| semantic+bge-reranker-v2-m3 | 0.802 | 0.904 | 0.924 | 0.843 | 1014 | 857 | 1609 |
+| bm25+pinecone-rerank-v0 | 0.594 | 0.680 | 0.696 | 0.631 | 662 | 655 | 805 |
+| bm25+cohere-rerank-3.5 | 0.825 | 0.911 | 0.927 | 0.862 | 510 | 386 | 1005 |
+| bm25+bge-reranker-v2-m3 | 0.512 | 0.574 | 0.597 | 0.541 | 569 | 474 | 1353 |
+| hybrid+pinecone-rerank-v0 | 0.825 | 0.927 | **0.954** | 0.870 | 1464 | 1379 | 1772 |
+| **hybrid+cohere-rerank-3.5** | **0.832** | **0.927** | **0.950** | **0.872** | 989 | 808 | 1770 |
+| hybrid+bge-reranker-v2-m3 | 0.805 | 0.901 | 0.941 | 0.851 | 1163 | 1035 | 1686 |
+
+**Key Findings:**
+- **Best overall**: `hybrid+cohere-rerank-3.5` achieves the highest Hit@1 (0.832) and MRR (0.872)
+- **Best without reranking**: `hybrid` mode provides strong performance (Hit@1: 0.785, MRR: 0.835)
+- **Fastest**: `bm25` mode is 5x faster than semantic search (102ms vs 527ms avg)
+- **Hybrid benefit**: Hybrid search outperforms both semantic and BM25 individually
+- **Reranking trade-off**: Reranking improves accuracy by ~5-7% but adds 500-1000ms latency
 
 ### Manual ECR Push (if needed)
 
