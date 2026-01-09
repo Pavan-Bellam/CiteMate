@@ -114,3 +114,8 @@ def setup_logging(level: str = "INFO", json_output: bool = True) -> None:
         ))
 
     root_logger.addHandler(handler)
+
+    # Suppress noisy third-party loggers unless in DEBUG mode
+    if level.upper() != "DEBUG":
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
