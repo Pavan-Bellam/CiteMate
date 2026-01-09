@@ -18,12 +18,11 @@ from uuid import uuid4
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langchain_core.runnables import ConfigurableField
 
 from .prompt import EXPERT_AGENT_PROMPT
 from .models import ExpertAgentResponse
 from .utils import get_markdown_of_paper
-from app.agents.starter import checkpointer
+from app.core.lifespan import get_checkpointer
 from app.core.logging import get_logger
 import openai
 
@@ -42,30 +41,38 @@ from app.core.exceptions import (
 
 logger = get_logger(__name__, agent="expert")
 
-model_name = os.environ.get("EXPERT_MODEL", "gpt-5")
-model = ChatOpenAI(model=model_name).configurable_fields(
-    reasoning=ConfigurableField(id="reasoning")
-)
+_expert_agent = None
 
-expert_agent = create_agent(
-    model=model,
-    system_prompt=EXPERT_AGENT_PROMPT,
-    response_format=ExpertAgentResponse,
-    checkpointer=checkpointer
-)
+
+REASONING = {"effort": "medium"}
+
+
+def _get_agent():
+    """Lazy initialization of expert agent."""
+    global _expert_agent
+    if _expert_agent is None:
+        model_name = os.environ.get("EXPERT_MODEL", "gpt-5")
+        model = ChatOpenAI(model=model_name, reasoning=REASONING)
+        _expert_agent = create_agent(
+            model=model,
+            system_prompt=EXPERT_AGENT_PROMPT,
+            response_format=ExpertAgentResponse,
+            checkpointer=get_checkpointer()
+        )
+        logger.info("Expert agent initialized", extra={"model": model_name, "reasoning": REASONING})
+    return _expert_agent
 
 
 # =============================================================================
 # Public API
 # =============================================================================
 
-async def query(question: str, thread_id: str, reasoning: dict={"effort": "minimal"}) -> ExpertAgentResponse:
+async def query(question: str, thread_id: str) -> ExpertAgentResponse:
     """Query an existing expert with a question.
 
     Args:
         question: The question to ask about the paper.
         thread_id: Expert thread identifier (from create_thread).
-        reasoning: Reasoning to pass to the model. example : {"effort": "minimal"}
 
     Returns:
         ExpertAgentResponse containing the answer.
@@ -78,9 +85,9 @@ async def query(question: str, thread_id: str, reasoning: dict={"effort": "minim
     logger.debug("Processing query", extra={"thread_id": thread_id})
 
     try:
-        response = await expert_agent.ainvoke(
+        response = await _get_agent().ainvoke(
             {"messages": [{"role": "user", "content": question}]},
-            {"configurable": {"thread_id": thread_id, "reasoning": reasoning}}
+            {"configurable": {"thread_id": thread_id}}
         )
         return response['structured_response']
 
