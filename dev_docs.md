@@ -1,5 +1,142 @@
 # Developer Documentation
 
+## Project Overview
+
+**RAS (Research Assistant System)** is an AI-powered research writing assistant for researchers in the AI/ML field. The system helps users write better papers by providing real-time feedback, literature discovery, and an intelligent chatbot.
+
+### Target Users
+Researchers writing academic papers, primarily in AI/ML (though the architecture supports any domain with appropriate data).
+
+### Core Features
+
+| Feature | Description |
+|---------|-------------|
+| **Corrections** | Detects grammatical mistakes, finds supporting evidence, and identifies opposing viewpoints in user's writing |
+| **Literature Survey** | Automatically discovers relevant papers as the user writes - triggered per paragraph or manually |
+| **Chatbot** | Answers research questions with citations and proofs from the paper corpus |
+
+### System Architecture
+
+The project consists of two major components:
+
+#### 1. RAG Pipeline (Completed)
+The ingestion and retrieval system that powers all features:
+- **Producer**: Fetches papers from ArXiv → S3 → SQS
+- **Consumer**: Parses PDFs → chunks → generates embeddings (dense + sparse) → Pinecone
+- **Retrieval**: Hybrid search using dense (OpenAI) and sparse (BM25) vectors
+
+#### 2. Multi-Agent System (Core Project)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          INTERFACE                              │
+│  - User-facing layer                                            │
+│  - Handles local corrections (grammar, style, consistency)      │
+│  - Formulates questions for external knowledge needs            │
+│  - Escalates to Router only when literature context required    │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                │ (only when external
+                                │  knowledge needed)
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                           ROUTER                                │
+│  - Central orchestrator                                         │
+│  - Maintains Q&A history and expert registry                    │
+│  - Routes questions to existing experts or forwards to Scout    │
+│  - Proactively spawns experts for frequently accessed papers    │
+└───────────┬─────────────────────────────────┬───────────────────┘
+            │                                 │
+            │ No expert match                 │ Expert exists
+            ▼                                 ▼
+┌─────────────────────────────┐          ┌───────────────────────────────┐
+│           SCOUT             │          │          EXPERTS              │
+│  - Stateless retrieval      │  spawns  │  (one per paper, persistent)  │
+│  - Hybrid search (dense +   │─────────►│                               │
+│    sparse vectors)          │          │ ┌───────┐ ┌───────┐ ┌───────┐ │
+│  - Answers from chunks if   │          │ │Paper A│ │Paper B│ │Paper C│ │
+│    sufficient               │          │ └───────┘ └───────┘ └───────┘ │
+│  - Spawns expert if deeper  │          │                               │
+│    context needed           │          │  - Full paper context loaded  │
+└─────────────────────────────┘          │  - Answers questions about    │
+                                         │    assigned paper             │
+                                         └───────────────────────────────┘
+```
+
+**Component Responsibilities:**
+
+| Component | Role | State |
+|-----------|------|-------|
+| **Interface** | User interaction, local corrections (grammar, style, internal consistency), question formulation, escalation decisions | Stateful (user conversation) |
+| **Router** | Orchestration, expert lifecycle management, routing decisions | Stateful (Q&A history + expert registry) |
+| **Scout** | Retrieval, first-pass answering, expert spawning when chunks insufficient | Stateless |
+| **Expert** | Deep Q&A on assigned paper | Stateful (full paper context) |
+
+### Question Flow
+```
+User writes paragraph
+       │
+       ▼
+   INTERFACE
+   (local corrections: grammar, style, consistency)
+       │
+       ├──────────────────────┐
+       │                      │
+       ▼                      ▼
+  Local issues only?    Needs external knowledge?
+       │                      │
+       ▼                      ▼
+  Return corrections       ROUTER
+  directly to user      (checks expert registry)
+                              │
+                         ┌────┴────┐
+                         │         │
+                         ▼         ▼
+                      Expert    SCOUT
+                      exists    (retrieves chunks)
+                         │            │
+                         │       ┌────┴────┐
+                         │       │         │
+                         │       ▼         ▼
+                         │  Sufficient?  Spawn/route
+                         │       │       to expert
+                         │       ▼         │
+                         │    Answer       │
+                         │       │         │
+                         └───┬───┴─────────┘
+                             │
+                             ▼
+                          ROUTER
+                         (synthesizes, updates context,
+                          may spawn experts for frequent papers)
+                             │
+                             ▼
+                         INTERFACE
+                         (returns to user)
+```
+
+### Use Case Flows
+
+**Writing Assistance (Corrections + Lit Survey):**
+1. User writes/completes a paragraph
+2. Interface handles local corrections (grammar, style, internal consistency)
+3. Interface identifies needs requiring external knowledge (evidence, counterpoints)
+4. Interface formulates questions and escalates to Router
+5. Router checks expert registry for relevant experts
+6. If no expert match → Scout retrieves chunks, answers directly or spawns experts
+7. If expert exists → Router queries expert directly
+8. Router synthesizes responses, updates context
+9. Interface combines local corrections with literature-based feedback and returns to user
+
+**Chatbot:**
+1. User asks a research question
+2. Interface passes query to Router
+3. Router checks expert registry
+4. Routes to existing expert or forwards to Scout
+5. Scout retrieves, answers, or spawns expert as needed
+6. Router synthesizes response with citations
+7. Interface returns answer to user
+
+---
 ## Project Structure
 
 ```
@@ -894,6 +1031,620 @@ docker push {account_id}.dkr.ecr.us-east-1.amazonaws.com/ras-consumer:{tag}
 
 **Tags:** Use `:staging` for staging, `:prod` for production.
 
-## TODO
+---
 
-- [x] Add sparse vectors (BM25) to ingestion pipeline for hybrid search
+## Multi-Agent Implementation
+
+This section documents the implemented agent components.
+
+### Expert Agent
+
+The Expert Agent is a stateful, paper-specific Q&A agent. Each expert maintains full context of a single research paper and answers questions based solely on that paper's content.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Expert Agent                                │
+├─────────────────────────────────────────────────────────────────┤
+│  State: Full paper content + conversation history               │
+│  Memory: MongoDB (via LangGraph checkpointing)                  │
+│  Model: GPT-5 with reasoning effort: medium                     │
+└─────────────────────────────────────────────────────────────────┘
+          │                                    ▲
+          │ create_thread(paper_id)            │ query(question, thread_id)
+          ▼                                    │
+┌──────────────────┐                  ┌────────────────────┐
+│  S3 (paper JSON) │                  │  ExpertAgentResponse│
+│  Parsed by       │                  │  - title           │
+│  Unstructured.io │                  │  - description     │
+└──────────────────┘                  │  - answer          │
+                                      └────────────────────┘
+```
+
+#### File Structure
+
+```
+app/agents/expert/
+├── __init__.py      # Module exports: query, create_thread, ExpertAgentResponse
+├── main.py          # Agent initialization and public API
+├── models.py        # Pydantic models for structured responses
+├── prompt.py        # System prompt defining agent behavior
+└── utils.py         # Paper retrieval and markdown conversion
+```
+
+#### Lifecycle
+
+1. **Creation**: `create_thread(paper_id)` fetches paper from S3, converts to markdown, initializes expert
+2. **Query**: `query(question, thread_id)` asks questions using the expert's thread
+3. **Persistence**: Conversation history persists in MongoDB via LangGraph checkpointing
+
+#### Usage
+
+```python
+from app.agents.expert import create_thread, query
+
+# Create an expert for a paper
+thread_id, title, description = await create_thread("2512.02942v1")
+# Returns: ("uuid-xxx", "Paper Title", "Brief description of paper scope")
+
+# Ask questions
+response = await query("What methodology does this paper use?", thread_id)
+# Returns: ExpertAgentResponse(answer="The paper uses...")
+```
+
+#### Response Model
+
+```python
+class ExpertAgentResponse(BaseModel):
+    title: Optional[str]       # Paper title (first message only)
+    description: Optional[str] # Paper summary (first message only)
+    answer: Optional[str]      # Response to user's question
+```
+
+#### Paper Processing Flow
+
+```
+paper_id
+    │
+    ▼
+get_markdown_of_paper(paper_id)
+    │
+    ├── get_parsed_from_s3()     # Fetch JSON from S3
+    │       │
+    │       ▼
+    │   {bucket}/{prefix}/raw/{paper_id}.json
+    │
+    └── convert_to_markdown()     # Convert to LLM-friendly format
+            │
+            ├── element_to_markdown()   # Handle each element type
+            │       - Title → # heading
+            │       - Header → ## heading
+            │       - Table → markdown table
+            │       - ListItem → bullet point
+            │       - CodeSnippet → code block
+            │       - etc.
+            │
+            └── Page breaks + list grouping
+```
+
+#### Exception Hierarchy
+
+```
+RASException (base)
+├── PaperNotFoundError      # Paper doesn't exist in S3
+├── PaperParseError         # Markdown conversion failed
+└── AgentError (base)
+    ├── ExpertNotFoundError     # Expert not in registry
+    ├── ExpertQueryError        # LLM call failed
+    └── ExpertCreationError     # Expert initialization failed
+```
+
+#### Logging Strategy
+
+| Level | What | Example |
+|-------|------|---------|
+| DEBUG | High-volume operations | Query processing, S3 fetch |
+| INFO | Significant events | Expert created successfully |
+| ERROR | Failures | Query failed, S3 error |
+
+Logs are JSON-formatted for CloudWatch compatibility with context fields:
+- `agent`: "expert"
+- `paper_id`: ArXiv ID
+- `thread_id`: Expert thread identifier
+
+#### Configuration
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `EXPERT_MODEL` | LLM model for expert | `gpt-5` |
+| `BOOTSTRAP_BUCKET_NAME` | S3 bucket for papers | Required |
+| `PAPERS_S3_PREFIX` | S3 prefix path | Required |
+| `MONGO_URI` | MongoDB connection string | Required |
+
+### Scout Agent
+
+The Scout Agent is a stateless retrieval agent that searches the knowledge base and answers questions using retrieved chunks. When chunks are insufficient, it spawns Expert agents for deep paper analysis.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       Scout Agent                                │
+├─────────────────────────────────────────────────────────────────┤
+│  State: expert_registry + retrieval_count + seen_paper_ids       │
+│  Memory: None (stateless)                                        │
+│  Model: GPT-5 with reasoning effort: medium                      │
+└─────────────────────────────────────────────────────────────────┘
+          │
+          │ query(question)
+          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Tools:                                                          │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────┐ │
+│  │  sample_chunks   │  │  query_paper     │  │  search_paper  │ │
+│  │  - Broad search  │  │  - Specific paper│  │  - Find by     │ │
+│  │  - top_k=50→3/ppr│  │  - By arxiv_id   │  │    title/kw    │ │
+│  │  - Max 3 calls   │  │  - Unlimited     │  │  - Returns IDs │ │
+│  └──────────────────┘  └──────────────────┘  └────────────────┘ │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  spawn_and_ask                                            │   │
+│  │  - Creates Expert for paper_id, queries with question     │   │
+│  │  - Updates expert_registry                                │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Response:                                                       │
+│  - answer: Synthesized answer with citations                     │
+│  - expert_registry: Any experts spawned during answering         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### File Structure
+
+```
+app/agents/scout/
+├── __init__.py      # Module exports: query
+├── main.py          # Agent initialization, tools, and public API
+├── models.py        # ScoutState with expert_registry reducer
+└── prompt.py        # System prompt defining agent behavior
+```
+
+#### Workflow
+
+1. **Initial Retrieval**: Pre-retrieves 50 chunks, filters to top 3 per paper
+2. **Assess Chunks**: Agent evaluates if chunks can answer the question
+3. **Escalation Order**:
+   - `query_paper` - Get more chunks from a seen paper (unlimited, cheap)
+   - `spawn_and_ask` - Full paper context via Expert (expensive, last resort)
+   - `sample_chunks` - Search for new papers (max 3 calls total)
+4. **Return**: Returns answer with citations and any spawned experts
+
+#### Retrieval Limits
+
+To prevent infinite retrieval loops, Scout enforces:
+- `MAX_RETRIEVAL_ATTEMPTS = 3` - Hard limit on `sample_chunks` calls per query
+- `seen_paper_ids` - Tracks papers already retrieved, auto-excluded from future `sample_chunks`
+- `query_paper` is unlimited - use for deep dives into specific papers
+- After limit reached, agent must work with existing chunks or use `spawn_and_ask`
+
+#### Usage
+
+```python
+from app.agents.scout import query
+
+# Query the knowledge base
+result = await query("What is the attention mechanism?")
+# Returns: {"answer": "The attention mechanism... (2512.02942v1)", "expert_registry": {...}}
+```
+
+#### Tools
+
+| Tool | Description | Parameters | Returns |
+|------|-------------|------------|---------|
+| `sample_chunks` | Broad search across new papers (max 3 calls) | `query` | List of chunks (top 3 per paper) or limit error |
+| `query_paper` | Deep dive into a specific paper (unlimited) | `arxiv_id`, `query`, `top_k=5` | List of chunks from that paper |
+| `search_paper` | Find paper by title/keywords | `title_keywords` | List of {arxiv_id, title} matches |
+| `spawn_and_ask` | Creates Expert for paper, asks question | `paper_id`, `question` | Answer string or Command |
+
+#### Error Handling in spawn_and_ask
+
+The `spawn_and_ask` tool handles errors gracefully and returns user-friendly messages:
+
+| Error | Response |
+|-------|----------|
+| `PaperNotFoundError` | "Could not create expert: paper {id} not found in the knowledge base." |
+| `LLMTimeoutError` | "Could not create expert for paper {id}: service temporarily unavailable." |
+| `LLMRateLimitError` | "Could not create expert for paper {id}: service temporarily unavailable." |
+| `ExpertCreationError` | "Could not create expert for paper {id}. The paper may be malformed." |
+| `ExpertQueryError` | "Could not get answer from expert for paper {id}." |
+
+#### State Model
+
+```python
+class ScoutState(AgentState):
+    expert_registry: Annotated[Dict[str, Any], merge_dicts]
+    # Maps paper_id -> {thread_id, title, description}
+    retrieval_count: int
+    # Tracks sample_chunks calls for limit enforcement
+    seen_paper_ids: Annotated[Set[str], merge_sets]
+    # Papers already retrieved, auto-excluded from sample_chunks
+```
+
+- `merge_dicts` reducer accumulates experts across tool calls
+- `merge_sets` reducer accumulates seen papers for exclusion filtering
+- `retrieval_count` enforces `MAX_RETRIEVAL_ATTEMPTS` limit
+
+#### Logging Strategy
+
+| Level | What | Example |
+|-------|------|---------|
+| DEBUG | High-volume operations | Chunk retrieval, reusing expert |
+| INFO | Significant events | spawn_and_ask called, expert created, query completed |
+| WARNING | Recoverable issues | Paper not found, rate limit hit |
+| ERROR | Failures | Expert creation failed, query failed |
+
+Logs are JSON-formatted with context fields:
+- `agent`: "scout"
+- `paper_id`: ArXiv ID (when applicable)
+- `question_preview`: First 100 chars of question
+
+#### Configuration
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `SCOUT_MODEL` | LLM model for Scout | `gpt-5` |
+
+### Router Agent
+
+The Router Agent is the central orchestrator that maintains conversation history, manages the expert registry, and routes questions to appropriate agents (Scout or existing Experts).
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       Router Agent                               │
+├─────────────────────────────────────────────────────────────────┤
+│  State: Conversation history + expert_registry                   │
+│  Memory: MongoDB (via LangGraph checkpointing)                   │
+│  Model: GPT-5 with reasoning effort: medium                      │
+└─────────────────────────────────────────────────────────────────┘
+          │
+          │ query(thread_id, query, expert_registry)
+          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Tools:                                                          │
+│  ┌──────────────────┐  ┌────────────────────────────────────┐   │
+│  │  create_expert   │  │  get_expert_registry                │   │
+│  │  - Spawns Expert │  │  - Lists available experts          │   │
+│  │    for paper_id  │  │  - Shows paper titles/descriptions  │   │
+│  └──────────────────┘  └────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  RouterResponse (structured output):                             │
+│  - answer: Final answer with citations (or None)                 │
+│  - expert_questions: {paper_id: [questions]} for Experts         │
+│  - scout_questions: [questions] for Scout                        │
+│  - expert_registry: Updated registry                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### File Structure
+
+```
+app/agents/router/
+├── __init__.py      # Module exports: query
+├── main.py          # Agent initialization, tools, and public API
+├── models.py        # RouterState and RouterResponse models
+└── prompt.py        # System prompt defining routing behavior
+```
+
+#### Workflow
+
+1. **Receive Query**: Gets user query with optional expert_registry from Scout
+2. **Detect New Experts**: Compares incoming registry vs checkpointed state
+3. **Notify LLM**: Appends new experts info to message if any found
+4. **Route Decision**: LLM decides to ask Scout, ask Experts, or answer
+5. **Return**: Structured response with routing decision or final answer
+
+#### Usage
+
+```python
+from app.agents.router import query
+
+# First query - no experts yet
+result = await query(
+    thread_id="conv-123",
+    query="What is the attention mechanism?",
+    expert_registry={}
+)
+# Returns: {"answer": None, "scout_questions": ["attention mechanism transformer"], ...}
+
+# After Scout returns with spawned experts
+result = await query(
+    thread_id="conv-123",
+    query="Scout found: The attention mechanism allows...",
+    expert_registry={"2512.02942v1": {"thread_id": "...", "title": "Attention Is All You Need", ...}}
+)
+# Router now knows about the new expert
+```
+
+#### Response Model
+
+```python
+class RouterResponse(BaseModel):
+    expert_questions: Optional[Dict[str, List[str]]]  # {paper_id: [questions]}
+    scout_questions: Optional[List[str]]              # Questions for Scout
+    answer: Optional[str]                             # Final answer (or None)
+```
+
+#### Tools
+
+| Tool | Description | Returns |
+|------|-------------|---------|
+| `create_expert` | Spawns Expert for paper_id | Command or error message |
+| `get_expert_registry` | Lists available experts | Formatted expert list |
+
+#### Error Handling in create_expert
+
+| Error | Response |
+|-------|----------|
+| Expert already exists | "Expert already exists for paper {id}." |
+| `PaperNotFoundError` | "Could not create expert: paper {id} not found in the knowledge base." |
+| `LLMTimeoutError` | "Could not create expert for paper {id}: service temporarily unavailable." |
+| `ExpertCreationError` | "Could not create expert for paper {id}. The paper may be malformed." |
+
+#### Logging Strategy
+
+| Level | What | Example |
+|-------|------|---------|
+| DEBUG | Low-level operations | get_expert_registry called, expert already exists |
+| INFO | Significant events | create_expert called, query processing, query completed |
+| WARNING | Recoverable issues | Paper not found, rate limit hit |
+| ERROR | Failures | Expert creation failed |
+
+#### Configuration
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `ROUTER_MODEL` | LLM model for Router | `gpt-5` |
+| `MONGO_URI` | MongoDB connection string | Required |
+
+### Interface Agent
+
+The Interface Agent is the user-facing layer that analyzes research paper paragraphs for grammar, logic, and factual accuracy.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Interface Agent                              │
+├─────────────────────────────────────────────────────────────────┤
+│  State: Document context (via MongoDB checkpointing)             │
+│  Memory: Paragraphs + corrections history                        │
+│  Model: GPT-5 with reasoning effort: low                         │
+└─────────────────────────────────────────────────────────────────┘
+          │
+          │ query(paragraph, paragraph_index, is_update)
+          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Analysis:                                                       │
+│  1. Grammar & Style - spelling, punctuation, academic tone       │
+│  2. Logic & Flow - coherence, consistency with prev paragraphs   │
+│  3. Fact Identification - claims needing literature verification │
+└─────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  InterfaceResponse:                                              │
+│  - grammar_corrections: List[str]                                │
+│  - logic_issues: List[str]                                       │
+│  - fact_questions: List[str] → sent to Router                    │
+│  - answer_to_user: str (final response)                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### File Structure
+
+```
+app/agents/interface/
+├── __init__.py      # Module exports: query
+├── main.py          # Agent initialization and public API
+├── models.py        # InterfaceResponse model
+└── prompt.py        # System prompt for paragraph analysis
+```
+
+#### Message Format (Checkpointed)
+
+Interface uses message-based checkpointing with prefixes:
+```
+Human: [NEW PARAGRAPH 0] The attention mechanism allows...
+AI: {grammar_corrections: [], logic_issues: [], fact_questions: ["What accuracy..."], ...}
+```
+
+#### Configuration
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `INTERFACE_MODEL` | LLM model for Interface | `gpt-5` |
+
+### Graph Orchestration
+
+The Graph module coordinates all agents using LangGraph's StateGraph with conditional branching and parallel execution.
+
+#### Architecture
+
+```
+START → interface_analyze → [branch]
+                              ├── END (no fact questions)
+                              └── create_router_request → router → [branch]
+                                                                     ├── expert ─┐
+                                                                     ├── scout ──┼→ create_router_request (loop)
+                                                                     └── interface_fact_results → END
+```
+
+#### File Structure
+
+```
+app/agents/graph/
+├── __init__.py      # Module exports: get_graph, analyze_paragraph, AnalysisResult
+├── main.py          # StateGraph definition, nodes, and branching logic
+├── model.py         # GraphState and GraphContext schemas
+└── runner.py        # High-level analyze_paragraph() API
+```
+
+#### Graph State
+
+```python
+class GraphState(AgentState):
+    # Interface state
+    interface_thread_id: str
+    interface_paragraph: Optional[str]
+    interface_paragraph_index: Optional[int]
+    interface_is_update: bool
+    interface_grammar_corrections: List[str]
+    interface_logic_issues: List[str]
+    interface_fact_questions: List[str]
+    interface_fact_results: List[str]
+
+    # Router state
+    router_thread_id: str
+    expert_registry: Dict[str, Dict[str, Any]]
+    expert_questions: Dict[str, List[str]]
+    expert_answers: Dict[str, str]
+    scout_questions: List[str]
+    scout_answers: List[str]
+    router_questions: List[str]
+    router_incoming_answers: List[str]
+    router_final_answer: Optional[str]
+```
+
+#### Checkpointing
+
+- `conversation_id` is used as the graph's `thread_id` for checkpointing
+- `interface_thread_id` and `router_thread_id` are stored in graph state checkpoint
+- On first invocation: new UUIDs are generated for thread IDs
+- On subsequent invocations: thread IDs are retrieved from checkpoint
+
+#### Usage
+
+```python
+from app.agents.graph import analyze_paragraph
+from app.services.conversations import ConversationService
+
+conversation = conversation_service.create()
+result = await analyze_paragraph(
+    conversation=conversation,
+    paragraph="Your text here...",
+    paragraph_index=0,
+)
+# Returns: AnalysisResult with grammar_corrections, logic_issues, fact_results
+```
+
+---
+
+## FastAPI Application
+
+The application exposes a REST API for managing conversations and analyzing paragraphs.
+
+### Project Structure
+
+```
+app/
+├── main.py                    # FastAPI app factory with lifespan
+├── api/
+│   ├── __init__.py
+│   ├── dependencies.py        # Dependency injection
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── analysis.py        # AnalyzeRequest, AnalyzeResponse
+│   │   └── conversations.py   # ConversationResponse, ConversationCreateResponse
+│   └── routes/
+│       ├── __init__.py        # Router aggregation
+│       ├── analysis.py        # POST /api/v1/analyze
+│       ├── conversations.py   # CRUD /api/v1/conversations
+│       └── health.py          # Health checks
+├── models/
+│   ├── __init__.py
+│   └── conversation.py        # Conversation document model
+├── services/
+│   └── conversations/
+│       ├── __init__.py
+│       └── service.py         # ConversationService
+└── core/
+    └── lifespan.py            # Application lifecycle management
+```
+
+### Conversation Model
+
+```python
+@dataclass
+class Conversation:
+    conversation_id: str   # Also used as graph thread_id
+    created_at: datetime
+    updated_at: datetime
+```
+
+Note: `interface_thread_id` and `router_thread_id` are NOT stored in the conversation document. They are stored in the graph state checkpoint.
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/conversations` | Create new conversation |
+| GET | `/api/v1/conversations/{id}` | Get conversation by ID |
+| DELETE | `/api/v1/conversations/{id}` | Delete conversation |
+| POST | `/api/v1/analyze` | Analyze paragraph |
+| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/ready` | Readiness check |
+
+### Lifecycle Management
+
+The `lifespan.py` module manages singleton services:
+
+```python
+# Singletons initialized at startup
+_mongo_client: MongoClient
+_checkpointer: MongoDBSaver
+_retrieval_service: RetrievalService
+_conversation_service: ConversationService
+
+# Getter functions for dependency injection
+def get_checkpointer() -> MongoDBSaver
+def get_retrieval_service() -> RetrievalService
+def get_conversation_service() -> ConversationService
+```
+
+### Running the Application
+
+```bash
+uvicorn app.main:app --reload
+```
+
+### Example API Usage
+
+```bash
+# Create conversation
+curl -X POST http://localhost:8000/api/v1/conversations
+
+# Analyze paragraph
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "paragraph": "Your text here...",
+    "paragraph_index": 0
+  }'
+
+# Continue with same conversation
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "paragraph": "Next paragraph...",
+    "paragraph_index": 1,
+    "conversation_id": "<id from previous response>"
+  }'
+```
