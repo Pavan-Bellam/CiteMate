@@ -1,18 +1,16 @@
 import os
 import time
 import asyncio
-import logging
 from enum import Enum
 from functools import wraps
-from langsmith.wrappers import wrap_openai
-from langsmith import traceable
-from langsmith.run_helpers import get_current_run_tree
 from pinecone import PineconeAsyncio
 
 from pinecone_text.sparse import BM25Encoder
 from openai import AsyncOpenAI
 
-logger = logging.getLogger("retrieval_service")
+from app.core.logging import get_logger
+
+logger = get_logger(__name__, service="retrieval")
 
 
 def retry_on_api_error(max_retries: int = 3, base_delay: float = 1.0):
@@ -29,12 +27,12 @@ def retry_on_api_error(max_retries: int = 3, base_delay: float = 1.0):
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt)
                         logger.warning(
-                            f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}): {e}. "
-                            f"Retrying in {delay:.1f}s"
+                            "API call failed, retrying",
+                            extra={"function": func.__name__, "attempt": attempt + 1, "max_retries": max_retries, "error": str(e), "delay": delay}
                         )
                         time.sleep(delay)
                     else:
-                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+                        logger.error("API call failed after max retries", extra={"function": func.__name__, "max_retries": max_retries, "error": str(e)})
             raise last_exception
         return wrapper
     return decorator
@@ -58,13 +56,11 @@ class RetrievalService:
         self.sparse_index = self.pc.IndexAsyncio(host=os.environ["SPARSE_INDEX_URL"])
 
         # OpenAI
-        self.openai_client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self.openai = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self.embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
-        self.openai = wrap_openai(self.openai_client)
 
         # BM25
         bm25_path = os.environ.get("BM25_ENCODER_PATH", "bm25_encoder.json")
-        print(f"bm25_path: {bm25_path}")
         if not os.path.exists(bm25_path):
             raise FileNotFoundError(f"BM25 encoder not found: {bm25_path}")
         self.bm25 = BM25Encoder().load(bm25_path)
@@ -75,20 +71,18 @@ class RetrievalService:
         self.rrf_k = int(os.environ.get("RRF_K", "60"))
 
         # Reranking config
-        self.rerank_enabled = os.environ.get("RERANK_ENABLED", "true").lower() == "true"
+        self.rerank_enabled = os.environ.get("RERANK_ENABLED", "false").lower() == "true"
         self.rerank_model = os.environ.get("RERANK_MODEL", "bge-reranker-v2-m3")
         self.rerank_top_n = int(os.environ.get("RERANK_TOP_N", "10"))
 
-        logger.info(f"RetrievalService initialized (mode={self.default_mode.value}, rerank={self.rerank_enabled})")
+        logger.info("RetrievalService initialized", extra={"mode": self.default_mode.value, "rerank_enabled": self.rerank_enabled})
     
-    @traceable(name="Get Embedding", run_type="embedding")
     @retry_on_api_error(max_retries=3, base_delay=1.0)
     async def _get_embedding(self, text: str) -> list[float]:
         """Get dense embedding for text."""
         response = await self.openai.embeddings.create(input=text, model=self.embedding_model)
         return response.data[0].embedding
 
-    @traceable(name="Get Sparse Vector", run_type="embedding")
     def _get_sparse_vector(self, text: str) -> dict:
         """Get sparse BM25 vector for text."""
         return self.bm25.encode_queries(text)
@@ -108,26 +102,28 @@ class RetrievalService:
         sorted_docs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return [doc_id for doc_id, _ in sorted_docs]
 
-    @traceable(name="Query Dense Index", run_type="retriever")
     @retry_on_api_error(max_retries=3, base_delay=1.0)
-    async def _query_dense(self, query: str, top_k: int, include_metadata: bool = True) -> list:
+    async def _query_dense(self, query: str, top_k: int, include_metadata: bool = True, filter: dict = None) -> list:
         """Query dense index."""
         embedding = await self._get_embedding(query)
-        results = await self.dense_index.query(
-            vector=embedding, top_k=top_k, include_metadata=include_metadata
-        )
+        query_params = {"vector": embedding, "top_k": top_k, "include_metadata": include_metadata}
+        if filter:
+            query_params["filter"] = filter
+        results = await self.dense_index.query(**query_params)
         return results.matches
 
-    @traceable(name="Query Sparse Index", run_type="retriever")
     @retry_on_api_error(max_retries=3, base_delay=1.0)
-    async def _query_sparse(self, query: str, top_k: int, include_metadata: bool = True) -> list:
+    async def _query_sparse(self, query: str, top_k: int, include_metadata: bool = True, filter: dict = None) -> list:
         """Query sparse index."""
         sparse_vec = self._get_sparse_vector(query)
-        results = await self.sparse_index.query(
-            sparse_vector={"indices": sparse_vec["indices"], "values": sparse_vec["values"]},
-            top_k=top_k,
-            include_metadata=include_metadata,
-        )
+        query_params = {
+            "sparse_vector": {"indices": sparse_vec["indices"], "values": sparse_vec["values"]},
+            "top_k": top_k,
+            "include_metadata": include_metadata,
+        }
+        if filter:
+            query_params["filter"] = filter
+        results = await self.sparse_index.query(**query_params)
         return results.matches
     
     def _dedup_results(self, dense_vectors: list, sparse_vectors: list) -> list:
@@ -151,7 +147,6 @@ class RetrievalService:
                     
         return results
 
-    @traceable(name="Rerank Candidates", run_type="tool")
     # @retry_on_api_error(max_retries=3, base_delay=1.0)
     async def _rerank(self, query: str, candidates: list, top_n: int) -> list:
         """Rerank candidates using Pinecone reranking."""
@@ -184,46 +179,50 @@ class RetrievalService:
             
         return results
 
-    @traceable(name="Retrieve", run_type="chain")
     async def retrieve(
         self,
         query: str,
-        mode: RetrievalMode | str | None = None,
         top_k: int | None = None,
-        rerank: bool | None = None,
+        exclude_papers: list[str] | None = None,
     ) -> list[dict]:
         """
         Retrieve relevant chunks from Pinecone.
 
         Args:
             query: Search query.
-            mode: Retrieval mode (semantic, bm25, hybrid). Defaults to config.
             top_k: Number of results. Defaults to config.
-            rerank: Whether to rerank results. Defaults to config.
+            exclude_papers: List of arxiv_ids to exclude from results.
 
         Returns:
             List of matching documents with id, score, and metadata.
         """
-        mode = RetrievalMode(mode) if mode else self.default_mode
+        mode = self.default_mode
         top_k = top_k or self.top_k
-        rerank = rerank if rerank is not None else self.rerank_enabled
+        rerank = self.rerank_enabled
 
-        # Trace attributes for this query
-        run = get_current_run_tree()
-        model_full_name = f"{mode.value}"
-        run.metadata['mode'] = mode.value
-        run.metadata['top_k'] = top_k
-        run.metadata['rerank'] = rerank
-        run.metadata['embedding_model'] = self.embedding_model
-        if self.rerank_enabled:
-            run.metadata['rerank_top_n'] = self.rerank_top_n
-            run.metadata['rerank_model'] = self.rerank_model
-            run.metadata['rrf_k'] = self.rrf_k
-            model_full_name += f"-rerank-{self.rerank_model}"
+        # Build filter for excluded papers
+        pc_filter = None
+        if exclude_papers:
+            pc_filter = {"arxiv_id": {"$nin": exclude_papers}}
+
+        logger.info("Starting retrieval", extra={"mode": mode.value, "top_k": top_k, "rerank": rerank, "excluded": len(exclude_papers) if exclude_papers else 0})
+
+        # # Trace attributes for this query
+        # run = get_current_run_tree()
+        # model_full_name = f"{mode.value}"
+        # run.metadata['mode'] = mode.value
+        # run.metadata['top_k'] = top_k
+        # run.metadata['rerank'] = rerank
+        # run.metadata['embedding_model'] = self.embedding_model
+        # if self.rerank_enabled:
+        #     run.metadata['rerank_top_n'] = self.rerank_top_n
+        #     run.metadata['rerank_model'] = self.rerank_model
+        #     run.metadata['rrf_k'] = self.rrf_k
+        #     model_full_name += f"-rerank-{self.rerank_model}"
             
-        run.metadata['model_full_name'] = model_full_name
+        # run.metadata['model_full_name'] = model_full_name
 
-        logger.debug(f"Retrieve: mode={mode.value}, top_k={top_k}, rerank={rerank}")
+        logger.debug("Retrieve parameters", extra={"mode": mode.value, "top_k": top_k, "rerank": rerank})
 
         # For reranking, fetch more candidates initially
         initial_k = 20 if rerank else top_k
@@ -234,12 +233,12 @@ class RetrievalService:
         # Parallelize queries
         tasks = []
         if mode in (RetrievalMode.SEMANTIC, RetrievalMode.HYBRID):
-            tasks.append(self._query_dense(query, initial_k))
+            tasks.append(self._query_dense(query, initial_k, filter=pc_filter))
         else:
             tasks.append(asyncio.sleep(0)) # Placeholder
 
         if mode in (RetrievalMode.BM25, RetrievalMode.HYBRID):
-            tasks.append(self._query_sparse(query, initial_k))
+            tasks.append(self._query_sparse(query, initial_k, filter=pc_filter))
         else:
             tasks.append(asyncio.sleep(0)) # Placeholder
             
@@ -247,8 +246,10 @@ class RetrievalService:
         
         if mode in (RetrievalMode.SEMANTIC, RetrievalMode.HYBRID):
             dense_matches = results_list[0] if isinstance(results_list[0], list) else []
+            logger.debug("Dense query completed", extra={"matches": len(dense_matches)})
         if mode in (RetrievalMode.BM25, RetrievalMode.HYBRID):
             sparse_matches = results_list[1] if isinstance(results_list[1], list) else []
+            logger.debug("Sparse query completed", extra={"matches": len(sparse_matches)})
 
         # Process results
         if rerank:
@@ -256,9 +257,12 @@ class RetrievalService:
             candidates = self._dedup_results(dense_matches, sparse_matches)
 
             if not candidates:
+                logger.debug("No candidates after dedup, returning empty")
                 return []
 
+            logger.debug("Reranking candidates", extra={"candidate_count": len(candidates)})
             reranked_result = await self._rerank(query, candidates, self.rerank_top_n)
+            logger.info("Retrieval completed", extra={"result_count": len(reranked_result), "reranked": True})
             return reranked_result
 
         else:
@@ -291,7 +295,7 @@ class RetrievalService:
                 return results
 
             # Semantic or BM25 only
-            return [
+            result = [
                 {
                     "id": m.id,
                     "score": m.score,
@@ -300,7 +304,10 @@ class RetrievalService:
                 }
                 for m in matches[:top_k]
             ]
+            logger.info("Retrieval completed", extra={"result_count": len(result), "reranked": False})
+            return result
             
     async def close(self):
         await self.dense_index.close()
         await self.sparse_index.close()
+        await self.pc.close()
