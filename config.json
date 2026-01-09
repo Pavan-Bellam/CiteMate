@@ -26,7 +26,19 @@
     "redis_tls": true
   },
   "pinecone": {
-    "embedding_dimension" : "3072"
+    "embedding_dimension": "3072"
+  },
+  "retrieval": {
+    "dense_index_url": "https://ras-papers-production-3072-elt23nv.svc.aped-4627-b74a.pinecone.io",
+    "sparse_index_url": "https://ras-papers-sparse-elt23nv.svc.aped-4627-b74a.pinecone.io",
+    "embedding_model": "text-embedding-3-large",
+    "bm25_encoder_path": "bm25_encoder.json",
+    "default_mode": "hybrid",
+    "top_k": 50,
+    "rrf_k": 60,
+    "rerank_enabled": false,
+    "rerank_model": "bge-reranker-v2-m3",
+    "rerank_top_n": 10
   },
   "github": {
     "org": "Pavan-Bellam",

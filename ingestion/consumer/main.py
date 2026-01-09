@@ -10,6 +10,7 @@ from src import (
     ChunkData,
     OpenAIClient,
     PineconeClient,
+    BM25Client,
     setup_logging,
 )
 
@@ -35,14 +36,20 @@ def embed_and_store(
     redis_client: RedisClient,
     openai_client: OpenAIClient,
     pinecone_client: PineconeClient,
-) -> int:
-    """Pop chunks from Redis, embed, and store in Pinecone."""
+    bm25_client: BM25Client,
+) -> dict:
+    """Pop chunks from Redis, embed (dense + sparse), and store in Pinecone."""
     chunks = redis_client.pop_batch()
     if not chunks:
-        return 0
+        return {"dense": 0, "sparse": 0}
 
     texts = [c.text for c in chunks]
+
+    # Generate dense embeddings (OpenAI)
     embeddings = openai_client.embed_texts(texts)
+
+    # Generate sparse vectors (BM25)
+    sparse_vectors = bm25_client.encode_documents(texts)
 
     ids = [f"{c.arxiv_id}_{c.chunk_index}" for c in chunks]
     metadatas = [
@@ -55,9 +62,9 @@ def embed_and_store(
         for c in chunks
     ]
 
-    upserted = pinecone_client.upsert_vectors(ids, embeddings, metadatas)
-    logger.info(f"Embedded and stored {upserted} chunks")
-    return upserted
+    result = pinecone_client.upsert_vectors(ids, embeddings, metadatas, sparse_vectors)
+    logger.info(f"Embedded and stored {result['dense']} dense, {result['sparse']} sparse vectors")
+    return result
 
 
 def process_paper(
@@ -67,6 +74,7 @@ def process_paper(
     redis_client: RedisClient,
     openai_client: OpenAIClient,
     pinecone_client: PineconeClient,
+    bm25_client: BM25Client,
 ) -> list[dict]:
     """Chunk elements, push to Redis, embed when threshold reached."""
     chunks = unstructured_client.chunk_elements(elements)
@@ -83,7 +91,7 @@ def process_paper(
         redis_client.push_chunk(chunk_data)
 
         if redis_client.should_embed():
-            embed_and_store(redis_client, openai_client, pinecone_client)
+            embed_and_store(redis_client, openai_client, pinecone_client, bm25_client)
 
     return chunks
 
@@ -120,6 +128,7 @@ def run_process(
     redis_client: RedisClient,
     openai_client: OpenAIClient,
     pinecone_client: PineconeClient,
+    bm25_client: BM25Client,
 ) -> None:
     """Process mode: load raw elements from S3, chunk, embed, store."""
     logger.info("Running in PROCESS mode - loading all raw elements from S3...")
@@ -140,6 +149,7 @@ def run_process(
                 redis_client,
                 openai_client,
                 pinecone_client,
+                bm25_client,
             )
             logger.info(f"Completed {arxiv_id}")
         except Exception as e:
@@ -149,7 +159,7 @@ def run_process(
     remaining = redis_client.get_pending_count()
     if remaining > 0:
         logger.info(f"Flushing {remaining} remaining chunks")
-        embed_and_store(redis_client, openai_client, pinecone_client)
+        embed_and_store(redis_client, openai_client, pinecone_client, bm25_client)
 
     logger.info("Process mode completed")
 
@@ -161,6 +171,7 @@ def run_full(
     redis_client: RedisClient,
     openai_client: OpenAIClient,
     pinecone_client: PineconeClient,
+    bm25_client: BM25Client,
 ) -> None:
     """Full mode: parse, chunk, embed, store in one pipeline."""
     logger.info("Running in FULL mode - polling for messages...")
@@ -172,7 +183,7 @@ def run_full(
             logger.debug("No messages, continuing to poll...")
             # Flush any pending chunks while waiting
             if redis_client.get_pending_count() > 0:
-                embed_and_store(redis_client, openai_client, pinecone_client)
+                embed_and_store(redis_client, openai_client, pinecone_client, bm25_client)
             continue
 
         arxiv_id = message["body"]["arxiv_id"]
@@ -187,6 +198,7 @@ def run_full(
                 redis_client,
                 openai_client,
                 pinecone_client,
+                bm25_client,
             )
             sqs_client.delete_message(message["receipt_handle"])
             logger.info(f"Completed {arxiv_id}")
@@ -220,7 +232,7 @@ def main() -> None:
         sqs_client = SQSClient(queue_url=os.environ["QUEUE_URL"])
         run_parse(sqs_client, s3_client, unstructured_client)
     else:
-        # process and full modes need Redis, OpenAI, Pinecone
+        # process and full modes need Redis, OpenAI, Pinecone, BM25
         redis_client = RedisClient(
             url=os.environ["REDIS_URL"],
             token_threshold=int(os.environ.get("EMBEDDING_TOKEN_THRESHOLD", "8000")),
@@ -233,6 +245,7 @@ def main() -> None:
             api_key=os.environ["PINECONE_API_KEY"],
             index_name=os.environ["PINECONE_INDEX_NAME"],
         )
+        bm25_client = BM25Client()
 
         if args.mode == "process":
             run_process(
@@ -241,6 +254,7 @@ def main() -> None:
                 redis_client,
                 openai_client,
                 pinecone_client,
+                bm25_client,
             )
         else:
             sqs_client = SQSClient(queue_url=os.environ["QUEUE_URL"])
@@ -251,6 +265,7 @@ def main() -> None:
                 redis_client,
                 openai_client,
                 pinecone_client,
+                bm25_client,
             )
 
 
