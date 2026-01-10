@@ -38,16 +38,26 @@ User → Interface Agent → Router Agent → Scout Agent → Expert Agents
 uv sync
 ```
 
-### 2. Configure Environment
+### 2. Configure
 
-Create a `.env` file:
+**`.env`** - Secrets and API keys (see `.env.example`):
 ```
-OPENAI_API_KEY=sk-xxx
-PINECONE_API_KEY=xxx
-MONGO_URI=mongodb://localhost:27017
-BOOTSTRAP_BUCKET_NAME=your-bucket
-PAPERS_S3_PREFIX=development/your-username/papers
+OPENAI_API_KEY=your-openai-api-key
+PINECONE_API_KEY=your-pinecone-api-key
+MONGODB_URI=your-mongodb-uri
+UNSTRUCTURED_API_KEY=your-unstructured-api-key
+REDIS_URL=your-redis-url
+LANGSMITH_API_KEY=your-langsmith-api-key
 ```
+
+**`config.json`** - Infrastructure and application settings:
+- `project_name`, `aws_region`, `aws_account_id` - AWS config
+- `bootstrap` - S3 bucket for Terraform state
+- `producer` - ArXiv categories, max results, max pages
+- `consumer` - Chunking params, embedding model, Pinecone index
+- `retrieval` - Search mode, top_k, reranking config
+- `agents` - Model names, S3 prefix for papers
+- `github` - Repo info for CI/CD OIDC
 
 ### 3. Run the Application
 

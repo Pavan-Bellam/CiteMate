@@ -19,7 +19,6 @@
     "embedding_token_threshold": 6000,
     "pinecone_index_name": "ras-papers"
   },
-
   "redis": {
     "redis_db_name": "ras-dev",
     "redis_primary_region": "us-east-1",
@@ -39,6 +38,13 @@
     "rerank_enabled": false,
     "rerank_model": "bge-reranker-v2-m3",
     "rerank_top_n": 10
+  },
+  "agents": {
+    "scout_model": "gpt-5",
+    "expert_model": "gpt-5",
+    "interface_model": "gpt-5",
+    "router_model": "gpt-5",
+    "papers_s3_prefix": "production/papers/"
   },
   "github": {
     "org": "Pavan-Bellam",
